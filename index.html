@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="키보드와 마우스로 룬을 그리는 판타지 어드벤처 게임"
+    />
+    <title>핑거 메이지(Finger mage)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app" class="game-shell">
+      <h1 id="game-title" class="sr-only">핑거 메이지(Finger mage)</h1>
+      <canvas id="world-canvas" class="world-canvas" aria-label="3인칭 2.5D 게임 화면"></canvas>
+      <canvas id="rune-canvas" class="rune-canvas" aria-label="마우스로 그리는 룬 궤적"></canvas>
+
+      <section id="title-screen" class="title-screen" aria-labelledby="title-heading">
+        <div class="title-background" data-asset-slot="title-background" aria-hidden="true"></div>
+        <div class="title-content">
+          <p class="title-kicker">GESTURE FANTASY ADVENTURE</p>
+          <h2 id="title-heading" class="title-heading">핑거 메이지<small>Finger mage</small></h2>
+          <label class="nickname-field" for="nickname-input">
+            <span>닉네임</span>
+            <input id="nickname-input" type="text" minlength="2" maxlength="10" autocomplete="nickname" placeholder="2~10글자" />
+          </label>
+          <nav class="title-menu" aria-label="타이틀 메뉴">
+            <button id="game-start-button" class="title-menu-button" type="button">게임 시작</button>
+            <button id="settings-button" class="title-menu-button" type="button">설정</button>
+            <button id="game-exit-button" class="title-menu-button" type="button">게임 종료</button>
+          </nav>
+          <section id="title-settings" class="title-settings" aria-label="설정" hidden>
+            <p>사운드 설정</p>
+            <div class="volume-settings">
+              <label><span>발자국 소리</span><input data-volume-category="footsteps" type="range" min="0" max="100" step="1" /><output></output></label>
+              <label><span>적 소리</span><input data-volume-category="enemies" type="range" min="0" max="100" step="1" /><output></output></label>
+              <label><span>마법 소리</span><input data-volume-category="magic" type="range" min="0" max="100" step="1" /><output></output></label>
+              <label><span>배경음악</span><input data-volume-category="music" type="range" min="0" max="100" step="1" /><output></output></label>
+            </div>
+            <p>비디오 설정</p>
+            <div class="video-settings">
+              <label><input data-video-setting="miniMap" type="checkbox" /><span>미니맵 표시</span></label>
+              <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 캠·조작 패널 표시</span></label>
+            </div>
+          </section>
+          <p id="title-status" class="title-status" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section id="exploration-screen" class="exploration-screen" aria-labelledby="exploration-heading" hidden>
+        <div class="exploration-header">
+          <p class="exploration-kicker">CHAPTER ROUTE</p>
+          <h2 id="exploration-heading">다음 탐험 노드 선택</h2>
+          <p>밝게 표시된 연결 노드로만 전진할 수 있습니다.</p>
+        </div>
+        <div id="exploration-graph" class="exploration-graph" aria-label="단방향 탐험 노드 지도"></div>
+        <p id="exploration-status" class="exploration-status" role="status" aria-live="polite">다음 노드를 선택하세요.</p>
+      </section>
+
+      <section id="shop-screen" class="shop-screen" aria-labelledby="shop-heading" hidden>
+        <div class="shop-room-shell" aria-hidden="true"><span>상점</span></div>
+        <div class="shop-panel">
+          <p class="exploration-kicker">ONE ROOM SHOP</p>
+          <h2 id="shop-heading">마법 상점</h2>
+          <p class="shop-wallet">보유 골드 <strong id="shop-gold">0G</strong></p>
+          <div id="shop-inventory" class="shop-inventory" aria-label="판매 상품"></div>
+          <p id="shop-status" class="shop-status" role="status" aria-live="polite">상품을 선택하세요.</p>
+          <button id="shop-leave-button" class="node-continue-button" type="button">상점을 나와 다음 단계 선택</button>
+        </div>
+      </section>
+
+      <section id="node-room-screen" class="node-room-screen" aria-labelledby="node-room-heading" hidden>
+        <div class="node-room-panel">
+          <p id="node-room-kicker" class="exploration-kicker">EVENT NODE</p>
+          <h2 id="node-room-heading">선택지 노드</h2>
+          <p id="node-room-description">선택지의 세부 내용은 아직 미정입니다.</p>
+          <div id="node-room-choices" class="event-choices" aria-label="보상 선택지"></div>
+          <button id="node-room-continue-button" class="node-continue-button" type="button">다음 단계 선택</button>
+        </div>
+      </section>
+
+      <section id="world-ui" class="world-ui" aria-labelledby="game-title" hidden>
+        <div class="top-left-ui">
+          <button class="menu-mark" data-gesture-ui="menu" data-manual-ui="menu" type="button" aria-label="메뉴: 우클릭으로 열기">☰</button>
+          <section id="npc-message" class="npc-dialogue-stack" aria-label="NPC 대사" aria-live="polite" hidden></section>
+          <section id="world-cast-notice" class="world-cast-notice" role="status" aria-live="polite" hidden>
+            <strong>마법 발동</strong>
+            <span id="world-cast-details"></span>
+          </section>
+          <section id="menu-panel" class="menu-panel" aria-label="게임 메뉴" role="dialog" aria-modal="true" hidden>
+            <p class="menu-panel-title">게임 메뉴</p>
+            <div class="menu-actions">
+              <button id="menu-resume-button" type="button">돌아가기</button>
+              <button id="menu-settings-button" type="button">사운드 설정</button>
+              <button id="menu-video-settings-button" type="button">비디오 설정</button>
+              <button id="menu-help-button" type="button">도움말</button>
+              <button id="menu-swap-hands-button" type="button" aria-pressed="false">왼손·오른손 반전</button>
+              <button id="menu-exit-button" type="button">게임 종료</button>
+            </div>
+            <section id="menu-audio-settings" class="menu-audio-settings" aria-label="사운드 설정" hidden>
+              <div class="volume-settings">
+                <label><span>발자국 소리</span><input data-volume-category="footsteps" type="range" min="0" max="100" step="1" /><output></output></label>
+                <label><span>적 소리</span><input data-volume-category="enemies" type="range" min="0" max="100" step="1" /><output></output></label>
+                <label><span>마법 소리</span><input data-volume-category="magic" type="range" min="0" max="100" step="1" /><output></output></label>
+                <label><span>배경음악</span><input data-volume-category="music" type="range" min="0" max="100" step="1" /><output></output></label>
+              </div>
+            </section>
+            <section id="menu-video-settings" class="menu-video-settings" aria-label="비디오 설정" hidden>
+              <div class="video-settings">
+                <label><input data-video-setting="miniMap" type="checkbox" /><span>미니맵 표시</span></label>
+                <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 캠·조작 패널 표시</span></label>
+              </div>
+            </section>
+            <p id="menu-input-guide" class="menu-input-guide">왼쪽: 룬/카메라 · 오른쪽: UI</p>
+          </section>
+        </div>
+
+        <section id="help-guide" class="help-guide" role="dialog" aria-modal="true" aria-labelledby="help-guide-title" hidden>
+          <div class="help-guide-card">
+            <h2 id="help-guide-title" class="sr-only">게임 도움말</h2>
+            <button id="help-guide-close" class="help-guide-close" type="button" aria-label="도움말 닫기">×</button>
+            <img id="help-guide-image" class="help-guide-image" alt="" />
+            <p id="help-guide-text" class="help-guide-text"></p>
+            <nav class="help-guide-pagination" aria-label="도움말 페이지 이동">
+              <button id="help-guide-previous" type="button" aria-label="이전 도움말 페이지">◀</button>
+              <output id="help-guide-page" aria-live="polite">1/11</output>
+              <button id="help-guide-next" type="button" aria-label="다음 도움말 페이지">▶</button>
+            </nav>
+          </div>
+        </section>
+
+        <p id="boss-intro-title" class="boss-intro-title" hidden>타락한 정령왕</p>
+        <p id="mana-empty-notice" class="mana-empty-notice" role="alert" hidden>마나 부족!!</p>
+        <p id="spawn-point-notice" class="spawn-point-notice" role="status" aria-live="polite" hidden>스폰포인트 저장됨!</p>
+        <section id="boss-hud" class="boss-hud" aria-label="타락한 정령왕 체력" hidden>
+          <strong>타락한 정령왕</strong>
+          <div class="boss-health-track"><span id="boss-health-fill"></span></div>
+        </section>
+
+        <aside class="mini-map" data-gesture-ui="mini-map" data-manual-ui="mini-map" aria-label="미니맵: 우클릭으로 확대">
+          <p class="mini-map-title">미니맵</p>
+          <div id="map-rooms" class="map-rooms" aria-label="절차 생성된 방 지도"></div>
+        </aside>
+
+        <aside class="player-hud" aria-label="플레이어 상태">
+          <p id="gold-readout" class="gold-readout">G: 0</p>
+          <div class="portrait-hud" aria-hidden="true">
+            <svg class="curved-resources" viewBox="0 0 180 180">
+              <path class="resource-track health-track" pathLength="100" d="M 29.15 106.30 A 63 63 0 0 1 134.55 45.45" />
+              <path class="resource-value health-value" pathLength="100" d="M 29.15 106.30 A 63 63 0 0 1 134.55 45.45" />
+              <path class="resource-track ultimate-track" pathLength="100" d="M 19.30 57.04 A 78 78 0 1 1 134.74 153.88" />
+              <path class="resource-value ultimate-value" pathLength="100" d="M 19.30 57.04 A 78 78 0 1 1 134.74 153.88" />
+              <path class="resource-track mana-track" pathLength="100" d="M 141.61 53.86 A 63 63 0 0 1 134.55 134.55" />
+              <path class="resource-value mana-value" pathLength="100" d="M 141.61 53.86 A 63 63 0 0 1 134.55 134.55" />
+              <text id="health-readout" class="resource-number health-number" x="20" y="112">100</text>
+              <text id="mana-readout" class="resource-number mana-number" x="145" y="140">100</text>
+              <text id="ultimate-readout" class="resource-number ultimate-number" x="139" y="164">0</text>
+            </svg>
+            <div class="portrait">캐릭터<br />일러스트</div>
+          </div>
+        </aside>
+        <p id="defense-timer" class="defense-timer" role="status" aria-live="polite" hidden>방어 3.0</p>
+
+        <section class="tracker-panel control-panel" aria-label="손짓 인식 및 대체 조작 안내">
+          <p class="camera-title">손짓 인식 연결</p>
+          <div class="camera-stage">
+            <video id="hand-camera" autoplay muted playsinline></video>
+            <canvas id="landmark-canvas" aria-hidden="true"></canvas>
+            <p id="camera-placeholder" class="camera-placeholder">게임 시작 후 카메라 권한을 허용하면 손 인식이 시작됩니다.</p>
+          </div>
+          <p id="hand-tracker-status" class="hand-tracker-status" role="status" aria-live="polite">MediaPipe 준비 중</p>
+          <p class="camera-title">대체 조작</p>
+          <div class="manual-control-stage">
+            <div class="wasd-keys" aria-label="이동 키">
+              <kbd class="key-w">W</kbd>
+              <kbd class="key-a">A</kbd><kbd class="key-s">S</kbd><kbd class="key-d">D</kbd>
+            </div>
+            <dl class="manual-control-list">
+              <div><dt><kbd>1</kbd></dt><dd>공격 룬</dd></div>
+              <div><dt><kbd>2</kbd></dt><dd>방어 룬</dd></div>
+              <div><dt id="rune-camera-button-label">좌클릭</dt><dd>룬 그리기 / 카메라 회전</dd></div>
+              <div><dt id="ui-button-label">우클릭</dt><dd>UI 조작</dd></div>
+            </dl>
+          </div>
+          <p class="camera-later-note">현재 단계에서는 손 랜드마크만 인식하며 게임 조작에는 아직 사용하지 않습니다.</p>
+          <p id="app-status" class="status" role="status" aria-live="polite">
+            대체 입력을 준비하는 중입니다.
+          </p>
+          <p id="gesture-readout" class="gesture-readout" aria-live="polite">
+            입력 상태: 준비 중
+          </p>
+        </section>
+
+        <div id="ultimate-edge-effect" class="ultimate-edge-effect" aria-hidden="true"></div>
+        <section id="rune-mode-panel" class="rune-mode-panel" aria-live="polite" hidden>
+          <header class="rune-mode-header">
+            <p id="rune-mode-label" class="rune-mode-label">공격 룬</p>
+            <p>카드 선택 → 문양을 따라 그리기 → <kbd>Enter</kbd> 확정 · <kbd>Esc</kbd> 취소</p>
+          </header>
+          <div id="rune-guide-stage" class="rune-guide-stage" data-rune-drawing-area>
+            <svg id="rune-guide-symbol" class="rune-guide-symbol" viewBox="0 0 100 100" aria-label="선택한 룬 문양"></svg>
+            <p id="rune-guide-prompt" class="rune-guide-prompt">아래에서 속성 카드를 선택하세요.</p>
+            <section id="rune-cast-result" class="rune-cast-result" role="status" hidden>
+              <strong id="rune-cast-title">마법 발동</strong>
+              <span id="rune-cast-details"></span>
+            </section>
+          </div>
+          <div id="rune-card-tray" class="rune-card-tray" aria-label="룬 카드와 손패 새로고침"></div>
+        </section>
+
+        <section id="death-screen" class="death-screen" role="dialog" aria-modal="true" aria-labelledby="death-heading" hidden>
+          <div class="death-panel">
+            <p>마력이 끊어졌습니다</p>
+            <h2 id="death-heading">쓰러졌습니다</h2>
+            <div class="death-actions">
+              <button id="death-respawn-button" type="button">스폰포인트에서 다시 시작</button>
+              <button id="death-exit-button" type="button">게임 종료</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="clear-screen" class="clear-screen" role="dialog" aria-modal="true" aria-labelledby="clear-heading" hidden>
+          <div class="clear-panel">
+            <p class="clear-kicker">CORRUPTED SPIRIT KING DEFEATED</p>
+            <h2 id="clear-heading">클리어!!</h2>
+            <p id="clear-player-name" class="clear-player-name"></p>
+            <p id="clear-time" class="clear-time"></p>
+            <button id="clear-next-button" type="button">다음으로</button>
+          </div>
+        </section>
+
+        <section id="ranking-screen" class="ranking-screen" role="dialog" aria-modal="true" aria-labelledby="ranking-heading" hidden>
+          <div class="ranking-panel">
+            <p class="clear-kicker">CLEAR RANKING</p>
+            <h2 id="ranking-heading">랭킹</h2>
+            <ol id="ranking-list" class="ranking-list"></ol>
+            <div class="ranking-actions">
+              <button id="ranking-previous-button" type="button">이전으로</button>
+              <button id="ranking-title-button" type="button">타이틀로 돌아가기</button>
+              <button id="ranking-exit-button" type="button">게임 종료</button>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="developer-console" class="developer-console" role="dialog" aria-modal="true" aria-labelledby="developer-console-heading" hidden>
+        <div class="developer-console-panel">
+          <header>
+            <div>
+              <p>DEVELOPER TOOLS</p>
+              <h2 id="developer-console-heading">개발자 창</h2>
+            </div>
+            <button id="developer-console-close" type="button" aria-label="개발자 창 닫기">×</button>
+          </header>
+          <p class="developer-console-guide">명령어: /상점 · /보스 · /모든마법 · /궁극기 · /체력무한 · /돈무한 · /n단계</p>
+          <form id="developer-console-form">
+            <label for="developer-console-input">명령어 입력</label>
+            <div>
+              <input id="developer-console-input" type="text" autocomplete="off" spellcheck="false" placeholder="/명령어" />
+              <button type="submit">실행</button>
+            </div>
+          </form>
+          <p id="developer-console-status" class="developer-console-status" role="status" aria-live="polite">Z, U, N, Y를 동시에 눌러 열었습니다.</p>
+        </div>
+      </section>
+    </main>
+
+    <noscript>이 게임을 실행하려면 JavaScript를 활성화해야 합니다.</noscript>
+    <script>
+      if (window.location.protocol === "file:") {
+        const showDirectOpenGuide = () => {
+          const titleStatus = document.querySelector("#title-status");
+          const startButton = document.querySelector("#game-start-button");
+          const message = "index.html 직접 실행에서는 게임을 시작할 수 없습니다. 게임실행.cmd를 실행해 주세요.";
+
+          if (titleStatus) {
+            titleStatus.textContent = message;
+          }
+          if (startButton) {
+            startButton.addEventListener("click", () => {
+              titleStatus.textContent = message;
+            });
+          }
+        };
+        document.readyState === "loading"
+          ? document.addEventListener("DOMContentLoaded", showDirectOpenGuide, { once: true })
+          : showDirectOpenGuide();
+      }
+    </script>
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
