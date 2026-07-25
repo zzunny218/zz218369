@@ -14,6 +14,7 @@ import {
 
 const imageCache = new Map();
 const checkerboardRemovedImageCache = new Map();
+const gameplayCameraCache = new WeakMap();
 const ROOM_HALF_SIZE = ROOM_GRID_SIZE / 2;
 const WALL_HEIGHT = 2.7;
 const CAMERA_DISTANCE = 3.2;
@@ -21,11 +22,16 @@ const CAMERA_HEIGHT = 1.8;
 const CAMERA_SHOULDER_OFFSET = 0.62;
 const CAMERA_WALL_MARGIN = 0.16;
 const CAMERA_PITCH = 12 * Math.PI / 180;
+const FIRST_PERSON_CAMERA_PITCH = 2 * Math.PI / 180;
+const FIRST_PERSON_EYE_HEIGHT = PLAYER_WORLD_HEIGHT * 0.74;
+const FIRST_PERSON_FORWARD_OFFSET = 0.08;
 const HORIZONTAL_FIELD_OF_VIEW = 60 * Math.PI / 180;
 const NEAR_PLANE = 0.08;
 const ENTITY_VISUAL_SCALE = 5;
 const BASE_ENTITY_WORLD_HEIGHT = 0.32;
 const ROCK_WORLD_HEIGHT = 0.32 * ENTITY_VISUAL_SCALE;
+const MAX_CANVAS_PIXEL_RATIO = 1.5;
+const MAX_RENDERED_PARTICLES = 720;
 
 function getLoadedImage(source) {
   if (!source || typeof Image === "undefined") {
@@ -66,7 +72,7 @@ function getCheckerboardRemovedImage(source) {
 
 function resizeCanvas(canvas) {
   const bounds = canvas.getBoundingClientRect();
-  const pixelRatio = window.devicePixelRatio || 1;
+  const pixelRatio = Math.min(MAX_CANVAS_PIXEL_RATIO, window.devicePixelRatio || 1);
   const width = Math.max(1, Math.floor(bounds.width * pixelRatio));
   const height = Math.max(1, Math.floor(bounds.height * pixelRatio));
   if (canvas.width !== width || canvas.height !== height) {
@@ -91,21 +97,52 @@ function normalizeAngle(angle) {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
+function smoothStep(progress) {
+  return progress * progress * (3 - progress * 2);
+}
+
 /** 플레이어 뒤의 카메라가 벽 밖으로 나가지 않도록 방 안쪽으로 당긴다. */
-export function getThirdPersonCamera(session) {
+function calculateGameplayCamera(session) {
   const { forward, right } = cameraVectors(session.player.cameraYaw);
   const runeZoomProgress = clamp(session.player.runeZoomProgress ?? 0, 0, 1);
-  const cameraDistance = CAMERA_DISTANCE - runeZoomProgress * 0.82;
-  const shoulderOffset = CAMERA_SHOULDER_OFFSET * (1 - runeZoomProgress * 0.24);
-  const desiredX = session.player.x - forward.x * cameraDistance + right.x * shoulderOffset;
-  const desiredZ = session.player.z - forward.z * cameraDistance + right.z * shoulderOffset;
+  const firstPersonBlend = smoothStep(runeZoomProgress);
+  const desiredX = session.player.x - forward.x * CAMERA_DISTANCE + right.x * CAMERA_SHOULDER_OFFSET;
+  const desiredZ = session.player.z - forward.z * CAMERA_DISTANCE + right.z * CAMERA_SHOULDER_OFFSET;
+  const thirdPersonX = clamp(desiredX, -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN, ROOM_HALF_SIZE - CAMERA_WALL_MARGIN);
+  const thirdPersonZ = clamp(desiredZ, -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN, ROOM_HALF_SIZE - CAMERA_WALL_MARGIN);
+  const firstPersonX = clamp(
+    session.player.x + forward.x * FIRST_PERSON_FORWARD_OFFSET,
+    -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN,
+    ROOM_HALF_SIZE - CAMERA_WALL_MARGIN,
+  );
+  const firstPersonZ = clamp(
+    session.player.z + forward.z * FIRST_PERSON_FORWARD_OFFSET,
+    -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN,
+    ROOM_HALF_SIZE - CAMERA_WALL_MARGIN,
+  );
   const normalCamera = {
-    x: clamp(desiredX, -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN, ROOM_HALF_SIZE - CAMERA_WALL_MARGIN),
-    y: CAMERA_HEIGHT - runeZoomProgress * 0.12,
-    z: clamp(desiredZ, -ROOM_HALF_SIZE + CAMERA_WALL_MARGIN, ROOM_HALF_SIZE - CAMERA_WALL_MARGIN),
+    x: thirdPersonX + (firstPersonX - thirdPersonX) * firstPersonBlend,
+    y: CAMERA_HEIGHT + (FIRST_PERSON_EYE_HEIGHT - CAMERA_HEIGHT) * firstPersonBlend,
+    z: thirdPersonZ + (firstPersonZ - thirdPersonZ) * firstPersonBlend,
     forward,
     right,
+    pitch: CAMERA_PITCH + (FIRST_PERSON_CAMERA_PITCH - CAMERA_PITCH) * firstPersonBlend,
+    screenCenterYRatio: 0.43 + (0.5 - 0.43) * firstPersonBlend,
+    firstPersonBlend,
   };
+  const runeTargetFocus = session.runeTargetFocus;
+  if (runeTargetFocus && firstPersonBlend > 0) {
+    const targetDistance = Math.max(
+      0.01,
+      Math.hypot(runeTargetFocus.x - normalCamera.x, runeTargetFocus.z - normalCamera.z),
+    );
+    const targetPitch = clamp(
+      Math.atan2(normalCamera.y - runeTargetFocus.y, targetDistance),
+      -28 * Math.PI / 180,
+      34 * Math.PI / 180,
+    );
+    normalCamera.pitch += (targetPitch - normalCamera.pitch) * firstPersonBlend;
+  }
   const cinematic = session.bossCinematic;
   if (!cinematic?.active || !cinematic.focus) return normalCamera;
   const progress = clamp(cinematic.elapsedMs / cinematic.durationMs, 0, 1);
@@ -127,7 +164,66 @@ export function getThirdPersonCamera(session) {
     z: normalCamera.z + (closeZ - normalCamera.z) * blend,
     forward: closeVectors.forward,
     right: closeVectors.right,
+    pitch: normalCamera.pitch,
+    screenCenterYRatio: normalCamera.screenCenterYRatio,
+    firstPersonBlend: normalCamera.firstPersonBlend,
   };
+}
+
+export function getThirdPersonCamera(session) {
+  const player = session.player;
+  const cinematic = session.bossCinematic;
+  const cinematicActive = Boolean(cinematic?.active && cinematic.focus);
+  const playerX = player.x;
+  const playerZ = player.z;
+  const cameraYaw = player.cameraYaw;
+  const runeZoomProgress = player.runeZoomProgress ?? 0;
+  const cinematicElapsedMs = cinematicActive ? cinematic.elapsedMs : 0;
+  const cinematicDurationMs = cinematicActive ? cinematic.durationMs : 0;
+  const focusX = cinematicActive ? cinematic.focus.x : 0;
+  const focusZ = cinematicActive ? cinematic.focus.z : 0;
+  const runeTargetFocus = session.runeTargetFocus;
+  const runeTargetId = session.runeTargetId ?? "";
+  const runeTargetX = runeTargetFocus?.x ?? 0;
+  const runeTargetY = runeTargetFocus?.y ?? 0;
+  const runeTargetZ = runeTargetFocus?.z ?? 0;
+  const cached = gameplayCameraCache.get(session);
+  if (
+    cached
+    && cached.playerX === playerX
+    && cached.playerZ === playerZ
+    && cached.cameraYaw === cameraYaw
+    && cached.runeZoomProgress === runeZoomProgress
+    && cached.cinematicActive === cinematicActive
+    && cached.cinematicElapsedMs === cinematicElapsedMs
+    && cached.cinematicDurationMs === cinematicDurationMs
+    && cached.focusX === focusX
+    && cached.focusZ === focusZ
+    && cached.runeTargetId === runeTargetId
+    && cached.runeTargetX === runeTargetX
+    && cached.runeTargetY === runeTargetY
+    && cached.runeTargetZ === runeTargetZ
+  ) {
+    return cached.camera;
+  }
+  const camera = calculateGameplayCamera(session);
+  gameplayCameraCache.set(session, {
+    playerX,
+    playerZ,
+    cameraYaw,
+    runeZoomProgress,
+    cinematicActive,
+    cinematicElapsedMs,
+    cinematicDurationMs,
+    focusX,
+    focusZ,
+    runeTargetId,
+    runeTargetX,
+    runeTargetY,
+    runeTargetZ,
+    camera,
+  });
+  return camera;
 }
 
 function toCameraPoint(point, session) {
@@ -136,10 +232,12 @@ function toCameraPoint(point, session) {
   const relativeY = (point.y ?? 0) - camera.y;
   const relativeZ = point.z - camera.z;
   const horizontalDepth = relativeX * camera.forward.x + relativeZ * camera.forward.z;
+  const pitch = camera.pitch ?? CAMERA_PITCH;
   return {
     side: relativeX * camera.right.x + relativeZ * camera.right.z,
-    height: horizontalDepth * Math.sin(CAMERA_PITCH) + relativeY * Math.cos(CAMERA_PITCH),
-    depth: horizontalDepth * Math.cos(CAMERA_PITCH) - relativeY * Math.sin(CAMERA_PITCH),
+    height: horizontalDepth * Math.sin(pitch) + relativeY * Math.cos(pitch),
+    depth: horizontalDepth * Math.cos(pitch) - relativeY * Math.sin(pitch),
+    screenCenterYRatio: camera.screenCenterYRatio,
   };
 }
 
@@ -150,7 +248,7 @@ function projectCameraPoint(point, width, height) {
   const focal = width / (2 * Math.tan(HORIZONTAL_FIELD_OF_VIEW / 2));
   return {
     x: width / 2 + point.side * focal / point.depth,
-    y: height * 0.43 - point.height * focal / point.depth,
+    y: height * (point.screenCenterYRatio ?? 0.43) - point.height * focal / point.depth,
     depth: point.depth,
     focal,
   };
@@ -716,14 +814,23 @@ function drawParticleShape(context, particle, x, y, radius) {
 
 function drawCombatParticles(context, combatState, session, width, height) {
   if (!combatState) return;
-  const projectedParticles = combatState.particles
-    .filter((particle) => !particle.roomId || particle.roomId === session.currentRoomId)
-    .map((particle) => ({ particle, projection: projectWorldPoint(particle, session, width, height) }))
-    .filter(({ projection }) => projection
-      && projection.depth > 0.28
-      && projection.x > -width * 0.25 && projection.x < width * 1.25
-      && projection.y > -height * 0.25 && projection.y < height * 1.25)
-    .sort((left, right) => right.projection.depth - left.projection.depth);
+  const particles = combatState.particles ?? [];
+  const projectedParticles = [];
+  const samplingStep = Math.max(1, Math.ceil(particles.length / MAX_RENDERED_PARTICLES));
+  for (let index = particles.length - 1; index >= 0 && projectedParticles.length < MAX_RENDERED_PARTICLES; index -= samplingStep) {
+    const particle = particles[index];
+    if (particle.roomId && particle.roomId !== session.currentRoomId) continue;
+    const projection = projectWorldPoint(particle, session, width, height);
+    if (
+      !projection
+      || projection.depth <= 0.28
+      || projection.x <= -width * 0.25
+      || projection.x >= width * 1.25
+      || projection.y <= -height * 0.25
+      || projection.y >= height * 1.25
+    ) continue;
+    projectedParticles.push({ particle, projection });
+  }
 
   for (const { particle, projection } of projectedParticles) {
     const radius = Math.min(context.canvas.height * 0.014, Math.max(1, projection.focal * particle.size / projection.depth));
@@ -1586,7 +1693,10 @@ export function drawRoomScene(canvas, { dungeon, session, monstersByRoom, combat
   drawCampfireParticles(context, room.campfire, session, width, height);
 
   const playerProjection = projectEntity(session.player, session, width, height);
-  if (playerProjection) {
+  const playerVisibility = clamp(1 - (session.player.runeZoomProgress ?? 0) / 0.58, 0, 1);
+  if (playerProjection && playerVisibility > 0.01) {
+    context.save();
+    context.globalAlpha *= playerVisibility;
     drawPlayerUltimateGlow(context, session.player, playerProjection, height);
     drawPlayerBarrier(context, session.player, playerProjection, height);
     drawBillboard(context, playerProjection, {
@@ -1597,6 +1707,7 @@ export function drawRoomScene(canvas, { dungeon, session, monstersByRoom, combat
       hitFlash: (session.player.hitFlashMs ?? 0) > 0,
     });
     drawPlayerBarrier(context, session.player, playerProjection, height, { outlineOnly: true });
+    context.restore();
   }
   drawDamageNumbers(context, combatState, session, width, height);
 }

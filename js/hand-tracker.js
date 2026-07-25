@@ -10,6 +10,10 @@ const HAND_LANDMARKER_MODEL_URL = new URL(
   "../assets/models/hand_landmarker.task",
   import.meta.url,
 ).href;
+const PREFERRED_CAMERA_LABELS = Object.freeze(["nv98-hd110s v2", "nv98-hd110s"]);
+const INFERENCE_INTERVAL_MS = 1000 / 30;
+const CAMERA_PROCESSING_WIDTH = 640;
+const CAMERA_PROCESSING_HEIGHT = 360;
 
 /** 공식 MediaPipe Hand Landmarker와 브라우저 카메라를 연결한다. */
 export class HandTracker {
@@ -21,6 +25,8 @@ export class HandTracker {
     this.lastVideoTime = -1;
     this.animationFrameId = null;
     this.running = false;
+    this.lastInferenceTime = -Infinity;
+    this.cameraLabel = "";
   }
 
   /** 카메라와 손 랜드마크 인식을 시작한다. */
@@ -31,18 +37,47 @@ export class HandTracker {
     }
 
     this.onStatus("카메라 권한을 요청하는 중입니다.", "loading");
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    let preferredCamera = devices.find((device) => (
+      device.kind === "videoinput"
+      && PREFERRED_CAMERA_LABELS.some((label) => device.label.toLowerCase().includes(label))
+    ));
+    let stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        facingMode: "user",
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
+        ...(preferredCamera
+          ? { deviceId: { exact: preferredCamera.deviceId } }
+          : { facingMode: "user" }),
+        width: { ideal: CAMERA_PROCESSING_WIDTH, max: CAMERA_PROCESSING_WIDTH },
+        height: { ideal: CAMERA_PROCESSING_HEIGHT, max: CAMERA_PROCESSING_HEIGHT },
+        frameRate: { ideal: 30, max: 30 },
       },
     });
+    if (!preferredCamera) {
+      const authorizedDevices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+      preferredCamera = authorizedDevices.find((device) => (
+        device.kind === "videoinput"
+        && PREFERRED_CAMERA_LABELS.some((label) => device.label.toLowerCase().includes(label))
+      ));
+      const currentDeviceId = stream.getVideoTracks()[0]?.getSettings?.().deviceId;
+      if (preferredCamera && preferredCamera.deviceId !== currentDeviceId) {
+        stream.getTracks().forEach((track) => track.stop());
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            deviceId: { exact: preferredCamera.deviceId },
+            width: { ideal: CAMERA_PROCESSING_WIDTH, max: CAMERA_PROCESSING_WIDTH },
+            height: { ideal: CAMERA_PROCESSING_HEIGHT, max: CAMERA_PROCESSING_HEIGHT },
+            frameRate: { ideal: 30, max: 30 },
+          },
+        });
+      }
+    }
 
     try {
       this.video.srcObject = stream;
       await this.video.play();
+      this.cameraLabel = stream.getVideoTracks()[0]?.label ?? "";
       this.onStatus("MediaPipe 손 인식 모델을 불러오는 중입니다.", "loading");
       const { FilesetResolver, HandLandmarker } = await import(MEDIAPIPE_MODULE_URL);
       const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
@@ -64,7 +99,10 @@ export class HandTracker {
       }
 
       this.running = true;
-      this.onStatus("MediaPipe 연결 완료 · 양손을 카메라에 보여 주세요.", "ready");
+      this.onStatus(
+        `${this.cameraLabel || "카메라"} 연결 완료 · 양손을 카메라에 보여 주세요.`,
+        "ready",
+      );
       this.#processFrame();
     } catch (error) {
       stream.getTracks().forEach((track) => track.stop());
@@ -77,11 +115,14 @@ export class HandTracker {
   #processFrame = () => {
     if (!this.handLandmarker || !this.running) return;
 
-    if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+    const timestamp = performance.now();
+    if (timestamp - this.lastInferenceTime >= INFERENCE_INTERVAL_MS
+      && this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
       && this.video.currentTime !== this.lastVideoTime) {
       this.lastVideoTime = this.video.currentTime;
+      this.lastInferenceTime = timestamp;
       try {
-        const result = this.handLandmarker.detectForVideo(this.video, performance.now());
+        const result = this.handLandmarker.detectForVideo(this.video, timestamp);
         this.onFrame(result);
       } catch (error) {
         this.onStatus(`손 인식 오류: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -102,5 +143,7 @@ export class HandTracker {
     this.video.srcObject = null;
     this.running = false;
     this.lastVideoTime = -1;
+    this.lastInferenceTime = -Infinity;
+    this.cameraLabel = "";
   }
 }

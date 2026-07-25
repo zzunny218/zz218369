@@ -20,11 +20,20 @@ import {
   drainCombatSoundEvents,
   getEnemyTimeScaleForInputMode,
   isBossPhaseTwo,
-  spawnPlayerDefense,
   spawnPlayerMagic,
   spawnPlayerUltimate,
   updateCombatState,
 } from "./combat-system.js";
+import {
+  calculateTargetYaw,
+  findClosestLivingEnemy,
+  getRuneTargetAimPoint,
+  interpolateTargetYaw,
+} from "./combat-targeting.js";
+import {
+  clearStageEndRoom,
+  setDeveloperAttackPower,
+} from "./developer-actions.js";
 import { renderExplorationMap } from "./exploration-map-renderer.js";
 import {
   ExplorationNodeType,
@@ -35,18 +44,25 @@ import {
 import { GAME_ASSETS } from "./game-assets.js";
 import { applyEventChoice, createEventChoices, createMissingSkillChoice } from "./event-choice-system.js";
 import { GestureMode } from "./gesture-engine.js";
+import {
+  classifyHandGesture,
+  getHandLandmarksBySide,
+} from "./hand-gesture-classifier.js";
+import { HandInputController } from "./hand-input.js";
 import { HandTracker } from "./hand-tracker.js";
-import { clearHandLandmarks, drawHandLandmarks } from "./hand-tracker-view.js";
-import { ManualInputController } from "./manual-input.js";
+import { calculatePointerCameraTurn, createManualInputState } from "./manual-input.js";
 import {
   createSpiritKingBoss,
   generateRoomMonsters,
   scaleMonsterForStage,
 } from "./monster-catalog.js";
 import {
+  calculatePlayerAttackDamage,
   copyPlayerToProgress,
   copyProgressToPlayer,
   createPlayerProgress,
+  hasEnoughManaToCast,
+  hasManaRemaining,
   resetPlayerAfterDeath,
   shouldCancelRuneDrawing,
   startPlayerCastCooldown,
@@ -73,9 +89,11 @@ import {
   appendRunePoint,
   beginRuneStroke,
   clearRuneTrace,
+  countRunePoints,
   createRuneTrace,
   drawRuneTrace,
   endRuneStroke,
+  isScreenPointInsideRectangle,
   normalizeRunePoint,
 } from "./rune-trace.js";
 import {
@@ -97,55 +115,74 @@ import {
   createLightUltimateSequence,
 } from "./ultimate-sequence.js";
 import { applyVideoSettings, normalizeVideoSettings } from "./video-settings.js";
+import { AdaptivePointSmoother, interpolateTraceSegment } from "./tracking-smoothing.js";
 
-const APP_VERSION = "0.22.0";
+const APP_VERSION = "0.35.0";
+const HAND_CONTROL_SCHEMA_VERSION = "left-fist-rune-v1";
+const RUNE_CARD_DWELL_MS = 200;
+const MINI_MAP_UPDATE_INTERVAL_MS = 100;
+const HUD_UPDATE_INTERVAL_MS = 34;
+const WORLD_RENDER_INTERVAL_MS = 1000 / 50;
 const HELP_GUIDE_PAGES = Object.freeze([
   {
     image: new URL("../assets/images/help/help-01.png", import.meta.url).href,
-    text: "오른손을 전부 피면 룬 그리기 상태에 들어갈 수 있습니다. 룬 그리기 상태에 접어든 경우 시간이 느리게 흐르며, 룬을 그리기 시작할 경우 보스 방을 제외한 모든 곳에서는 시간이 정지합니다. 오른손을 전부 쥐면 룬 그리기가 취소됩니다.",
+    text: "게임을 시작하면 카메라에 양손이 모두 보이도록 자세를 잡아주세요. 기본 설정에서는 오른손으로 카드를 선택하고 마법을 발동하며, 왼손으로 룬 그리기를 제어합니다. 설정에서 ‘왼손·오른손 반전’을 선택하면 두 손의 역할이 서로 바뀝니다.",
   },
   {
     image: new URL("../assets/images/help/help-02.png", import.meta.url).href,
-    text: "룬 그리기를 시전할 때 왼손을 전부 쥐면 공격 마법을 지정할 수 있습니다. 왼손을 전부 피면 방어 마법을 지정할 수 있습니다.",
+    text: "WASD 또는 방향키로 캐릭터를 이동할 수 있습니다. 좌클릭한 상태로 화면을 드래그하거나 Q·E를 사용하면 카메라를 회전할 수 있습니다. 메뉴와 일반 UI는 마우스로 클릭해 조작합니다.",
   },
   {
     image: new URL("../assets/images/help/help-03.png", import.meta.url).href,
-    text: "",
+    text: "양손을 0.2초 동안 활짝 펴면 룬 모드에 들어갑니다. 룬 모드가 시작되면 1인칭 시점으로 전환되고 모든 적이 멈춥니다. 카메라는 가장 가까운 적을 자동으로 바라보며, 조준된 적에게는 붉은 표적이 표시됩니다.",
   },
   {
     image: new URL("../assets/images/help/help-04.png", import.meta.url).href,
-    text: "룬 그리기 상태에서는 검지를 피고 0.2초간 우측 하단에 있는 카드를 가리키면, 해당 카드의 마법을 지정할 수 있습니다. 지정한 후에도 마법은 다시 지정할 수 있습니다.",
+    text: "화면 아래의 카드를 마우스로 클릭하거나 오른손 검지로 0.2초 동안 가리키면 사용할 마법을 선택할 수 있습니다. 선택한 카드는 다른 카드로 자유롭게 변경할 수 있습니다. 새로고침은 마법을 세 번 사용한 뒤 다시 사용할 수 있습니다.",
   },
   {
     image: new URL("../assets/images/help/help-05.png", import.meta.url).href,
-    text: "룬은 검지를 핀 상태로 엄지와 중지를 맞닿게 하면 그릴 수 있습니다. 가이드라인과 비슷하게 그릴수록 마법의 위력이 상승하지만, 마법을 오래 그릴수록 마나 소모량이 커집니다. 마나가 전부 소모되면 도중에 마법 시전이 취소됩니다. 오른손을 피면 마법이 발사됩니다.",
+    text: "왼손을 주먹 쥔 동안 오른손 검지가 움직인 자리에 룬이 그려집니다. 카드에 표시된 문양을 따라 그린 뒤 오른손을 주먹 쥐면 마법이 발동합니다. 룬을 그리지 않은 상태에서 종료하면 마법 실패로 처리되지 않습니다.",
   },
   {
     image: new URL("../assets/images/help/help-06.png", import.meta.url).href,
-    text: "전투 스테이지에는 방마다 몬스터들이 존재합니다. 한 번 방에 들어가고 나면 몬스터를 모두 처치하기 전까지는 다른 방으로 이동할 수 없습니다.",
+    text: "가이드와 비슷하게 그릴수록 마법이 강해지고, 빠르게 완성할수록 마나를 적게 사용합니다. 마나가 30 이하일 때는 새로운 마법을 준비할 수 없습니다. 이미 시작한 룬은 마나가 0이 될 때 취소되며, 마법 사용 후에는 1.5초의 사용 대기시간이 적용됩니다.",
   },
   {
     image: new URL("../assets/images/help/help-07.png", import.meta.url).href,
-    text: "전투 스테이지에는 하나의 황금방이 존재합니다. 황금 방에 있는 몬스터들을 모두 처치하면 상점과 다음 스테이지로 가는 포탈이 열립니다. 상점에서는 체력을 회복할 수도 있고, 강화된 마법을 구매할 수도 있습니다. 방어 마법은 별도의 강화 마법이 존재하지 않습니다. 보스 스테이지의 경우 보스 방 전 방에 들어갈 때도 상점이 열립니다.",
+    text: "전투방에 들어간 뒤에는 몬스터를 모두 처치해야 문이 다시 열립니다. 몬스터는 골드와 회복 하트를 떨어뜨릴 수 있습니다. 사망하면 골드와 궁극기 게이지를 잃고 마지막 모닥불에서 부활하며, 해당 맵의 몬스터와 돌이 복구됩니다.",
   },
   {
     image: new URL("../assets/images/help/help-08.png", import.meta.url).href,
-    text: "전투 스테이지를 시작하면 모닥불이 있습니다. 모닥불이 있는 방은 스폰 포인트가 되어 사망시 돈과 궁극기 포인트를 전부 잃고 그 방에서 다시 시작할 수 있습니다. 보스 스테이지의 경우 보스 방의 전 방에도 모닥불이 있습니다.",
+    text: "탐험은 총 6단계로 진행됩니다. 중간 단계에서는 전투, 선택지, 상점 노드 중 하나를 선택하며 지나온 단계로 돌아갈 수 없습니다. 전투 노드의 황금방을 클리어하면 상점과 다음 단계로 향하는 통로가 열립니다.",
   },
   {
     image: new URL("../assets/images/help/help-09.png", import.meta.url).href,
-    text: "마법에는 상성이 존재합니다. 적의 상성에 유리한 상성으로 공격하면 1.25배의 데미지가 들어가고, 불리한 상성으로 공격하면 0.8배의 데미지가 들어갑니다. 방어 할 때는 유리한 상성이면 0.8배로 데미지가 들어오고, 불리한 상성이면 1.25배로 데미지가 들어옵니다.",
+    text: "상점에서는 30G로 체력을 50 회복하거나 강화된 마법 카드를 구매할 수 있습니다. 2스킬은 50G이며, 해당 속성의 2스킬을 보유하면 3스킬이 75G로 등장할 수 있습니다. 선택지 노드에서는 두 가지 보상 중 하나를 선택합니다.",
   },
   {
     image: new URL("../assets/images/help/help-10.png", import.meta.url).href,
-    text: "궁극기 포인트는 적들에게 데미지를 주면 얻을 수 있습니다. 궁극기 포인트가 100이 되면 궁극기 카드가 추가됩니다.",
+    text: "속성에 유리한 공격은 1.25배, 불리한 공격은 0.8배의 피해를 줍니다. 노말 속성은 상성의 영향을 받지 않습니다. 각 속성에는 1·2·3스킬이 있으며 상점이나 보상을 통해 상위 스킬을 획득할 수 있습니다.",
   },
   {
     image: new URL("../assets/images/help/help-11.png", import.meta.url).href,
-    text: "궁극기를 시전할 때는 총 세가지의 룬을 그려야 합니다. 궁극기는 10초간 모든 데미지를 80% 경감하고, 모든 공격의 데미지가 1.5배가 되며, 주변에 강력한 빛 속성 지속 데미지를 넣는 마법진이 생깁니다.",
+    text: "적에게 피해를 주면 궁극기 게이지가 상승합니다. 게이지가 100이 되면 전용 카드가 나타나며, 세 개의 룬을 차례대로 완성해야 합니다. 발동 후 10초 동안 공격력이 1.5배가 되고 받는 피해가 80% 감소하며, 주변에 강력한 빛의 마법진이 생성됩니다.",
+  },
+  {
+    image: new URL("../assets/images/help/help-12.png", import.meta.url).href,
+    text: "마지막 단계에는 타락한 정령왕이 기다리고 있습니다. 보스는 속박, 기절, 밀쳐내기 효과에 면역이며 다양한 광역 마법과 소환 공격을 사용합니다. 체력이 낮아지면 숲을 어둠으로 뒤덮고 마나 소모량을 증가시키므로, 공격 범위를 확인하며 끝까지 집중해야 합니다.",
   },
 ]);
-const inputController = new ManualInputController();
+const BOSS_DIALOGUES = Object.freeze({
+  appearance: "누가… 나의 잠을 깨우는가.",
+  combatStart: "돌아가라. 이 숲은 이제 누구도 품지 않는다.",
+  strongAttack: "뿌리도, 바람도, 모두 내 분노에 답하라!",
+  heavyHit: "그 빛… 아직 꺼지지 않았단 말인가.",
+  summon: "타락한 아이들아, 왕의 부름에 응답하라.",
+  rampage: "아아… 숲이 울부짖는구나. 그렇다면 모두, 나와 함께 무너져라!",
+});
+const inputController = new HandInputController();
+const manualInputState = createManualInputState();
 const runeTrace = createRuneTrace();
 let dungeon = null;
 let worldSession = null;
@@ -158,7 +195,6 @@ let shopReturnTarget = "exploration";
 let currentStagePortalId = null;
 let gameStarted = false;
 let menuOpen = false;
-let cameraDrag = null;
 let activeRuneCard = null;
 let activeSkillTier = 1;
 let runeDeck = createRuneDeck(createRuneCardPool(RUNE_CARDS));
@@ -170,6 +206,11 @@ let npcConversationStarted = false;
 let npcDialogueTimers = [];
 let castNoticeTimer = null;
 let lastSceneFrameTime = performance.now();
+let miniMapUpdateAccumulatorMs = MINI_MAP_UPDATE_INTERVAL_MS;
+let hudUpdateAccumulatorMs = HUD_UPDATE_INTERVAL_MS;
+let worldRenderAccumulatorMs = WORLD_RENDER_INTERVAL_MS;
+let lastRuneViewProgressCss = "";
+let lastRuneTargetOpacityCss = "";
 let playerFootstepTimerMs = 0;
 let deathDecisionOpen = false;
 let currentCombatStage = 1;
@@ -185,7 +226,6 @@ let manaNoticeTimer = null;
 let spawnPointNoticeTimer = null;
 let runElapsedMs = 0;
 let clearScreenOpen = false;
-let latestClearRecord = null;
 let developerConsoleWasGameStarted = false;
 const developerChordKeys = new Set();
 let ultimateSequence = null;
@@ -199,6 +239,26 @@ let completedCombatRewardKeys = new Set();
 let helpGuidePageIndex = 0;
 let handTracker = null;
 let lastDetectedHandCount = -1;
+let playerHudElements = null;
+let bossHudElements = null;
+let handPointerElement = null;
+const handCursorSmoother = new AdaptivePointSmoother({
+  minimumAlpha: 0.3,
+  maximumAlpha: 0.86,
+  predictionMs: 26,
+});
+const handControlRuntime = {
+  lastHandsSeenAt: performance.now(),
+  drawingSide: "right",
+  movementSide: "left",
+  palmOpenSince: null,
+  runeEntryLatched: false,
+  fistLatched: false,
+  lastRunePoint: null,
+  cardDwellKey: null,
+  cardDwellStartedAt: 0,
+  cardDwellLatched: false,
+};
 
 function cloneGameData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -211,6 +271,13 @@ function updateStatus(message) {
   }
 }
 
+function setDocumentState(key, value) {
+  const nextValue = String(value);
+  if (document.documentElement.dataset[key] !== nextValue) {
+    document.documentElement.dataset[key] = nextValue;
+  }
+}
+
 function setHandTrackerStatus(message, state = "loading") {
   const status = document.querySelector("#hand-tracker-status");
   if (!(status instanceof HTMLElement)) return;
@@ -218,13 +285,182 @@ function setHandTrackerStatus(message, state = "loading") {
   status.dataset.state = state;
 }
 
+function setHandPointer(point = null, dwellProgress = 0, active = false) {
+  const pointer = handPointerElement?.isConnected
+    ? handPointerElement
+    : document.querySelector("#hand-pointer");
+  if (!(pointer instanceof HTMLElement)) return;
+  handPointerElement = pointer;
+  pointer.hidden = !point;
+  if (!point) return;
+  pointer.style.left = `${point.x}px`;
+  pointer.style.top = `${point.y}px`;
+  pointer.style.setProperty("--dwell-progress", `${Math.max(0, Math.min(1, dwellProgress)) * 360}deg`);
+  pointer.classList.toggle("is-active", active);
+}
+
+function resetRuneCardDwell() {
+  handControlRuntime.cardDwellKey = null;
+  handControlRuntime.cardDwellStartedAt = 0;
+  handControlRuntime.cardDwellLatched = false;
+}
+
+function getRuneCardAtPoint(point) {
+  if (!point || typeof document.elementFromPoint !== "function") return null;
+  const hit = document.elementFromPoint(point.x, point.y);
+  const card = hit instanceof Element ? hit.closest(".rune-card") : null;
+  return card instanceof HTMLButtonElement && !card.disabled ? card : null;
+}
+
+function updateRuneCardDwell(point, timestamp, canSelect) {
+  const card = canSelect ? getRuneCardAtPoint(point) : null;
+  if (!card) {
+    resetRuneCardDwell();
+    setHandPointer(point, 0, false);
+    return false;
+  }
+
+  const dwellKey = card.dataset.runeDeckId ?? card.dataset.runeCardId ?? card.getAttribute("aria-label") ?? "";
+  if (handControlRuntime.cardDwellKey !== dwellKey) {
+    handControlRuntime.cardDwellKey = dwellKey;
+    handControlRuntime.cardDwellStartedAt = timestamp;
+    handControlRuntime.cardDwellLatched = false;
+  }
+  const dwellProgress = Math.min(1, Math.max(0, (timestamp - handControlRuntime.cardDwellStartedAt) / RUNE_CARD_DWELL_MS));
+  setHandPointer(point, dwellProgress, true);
+  if (dwellProgress >= 1 && !handControlRuntime.cardDwellLatched) {
+    handControlRuntime.cardDwellLatched = true;
+    card.click();
+  }
+  return true;
+}
+
+function resetHandControlRuntime({ preserveLastSeen = false } = {}) {
+  handCursorSmoother.reset();
+  handControlRuntime.palmOpenSince = null;
+  handControlRuntime.runeEntryLatched = false;
+  handControlRuntime.fistLatched = false;
+  handControlRuntime.lastRunePoint = null;
+  resetRuneCardDwell();
+  if (!preserveLastSeen) handControlRuntime.lastHandsSeenAt = performance.now();
+  inputController.setSceneMovement({ x: 0, y: 0 });
+  setHandPointer();
+}
+
+function mirroredScreenPoint(landmark, smoother, timestamp) {
+  if (!landmark) return null;
+  const normalized = smoother.update({ x: 1 - landmark.x, y: landmark.y }, timestamp);
+  if (!normalized) return null;
+  return {
+    x: normalized.x * window.innerWidth,
+    y: normalized.y * window.innerHeight,
+  };
+}
+
+function appendHandRunePoint(runeCanvas, screenPoint) {
+  const runePoint = normalizeRunePoint(
+    screenPoint.x,
+    screenPoint.y,
+    runeCanvas.getBoundingClientRect(),
+  );
+  if (runeTrace.activeStrokeIndex === null) {
+    if (inputController.state.mode === GestureMode.RUNE_READY) {
+      inputController.startDrawing();
+      renderInputState();
+    }
+    beginRuneStroke(runeTrace, runePoint);
+    handControlRuntime.lastRunePoint = runePoint;
+    hideRuneResult();
+    drawRuneTrace(runeCanvas, runeTrace);
+    return;
+  }
+  const points = interpolateTraceSegment(handControlRuntime.lastRunePoint, runePoint);
+  points.forEach((point, index) => appendRunePoint(
+    runeTrace,
+    point,
+    { sparkCount: index === points.length - 1 ? 3 : 0 },
+  ));
+  handControlRuntime.lastRunePoint = runePoint;
+  drawRuneTrace(runeCanvas, runeTrace);
+}
+
+function updateHandGameplay(result, timestamp, runeCanvas) {
+  const hands = getHandLandmarksBySide(result);
+  const reversed = inputController.state.handRolesReversed;
+  const drawingSide = reversed ? "left" : "right";
+  const movementSide = reversed ? "right" : "left";
+  if (drawingSide !== handControlRuntime.drawingSide) {
+    handControlRuntime.drawingSide = drawingSide;
+    handControlRuntime.movementSide = movementSide;
+    resetHandControlRuntime({ preserveLastSeen: true });
+  }
+  const drawingLandmarks = hands[drawingSide];
+  const movementLandmarks = hands[movementSide];
+  const drawingGesture = classifyHandGesture(drawingLandmarks);
+  const movementGesture = classifyHandGesture(movementLandmarks);
+  const cursor = mirroredScreenPoint(drawingLandmarks?.[8], handCursorSmoother, timestamp);
+
+  if (!gameStarted || menuOpen || deathDecisionOpen || clearScreenOpen || worldSession?.bossCinematic?.active) {
+    resetRuneCardDwell();
+    setHandPointer(cursor, 0, false);
+    return;
+  }
+
+  if (inputController.state.mode === GestureMode.EXPLORING) {
+    resetRuneCardDwell();
+    setHandPointer(cursor, 0, false);
+    const bothHandsOpen = drawingGesture.isPalmOpen && movementGesture.isPalmOpen;
+    if (bothHandsOpen) {
+      handControlRuntime.palmOpenSince ??= timestamp;
+      if (
+        timestamp - handControlRuntime.palmOpenSince >= 180
+        && !handControlRuntime.runeEntryLatched
+      ) {
+        handControlRuntime.runeEntryLatched = true;
+        beginHandRuneMode("attack", runeCanvas);
+      }
+    } else {
+      handControlRuntime.palmOpenSince = null;
+      handControlRuntime.runeEntryLatched = false;
+    }
+    handControlRuntime.fistLatched = drawingGesture.isFist;
+    return;
+  }
+
+  updateRuneCardDwell(cursor, timestamp, Boolean(drawingGesture.isIndexExtended));
+
+  if (drawingGesture.isFist) {
+    if (!handControlRuntime.fistLatched) {
+      handControlRuntime.fistLatched = true;
+      finishHandRuneCast(runeCanvas);
+    }
+    return;
+  }
+  handControlRuntime.fistLatched = false;
+
+  const shouldDraw = Boolean(
+    cursor
+    && activeRuneCard
+    && movementGesture.isFist
+    && isInsideRuneGuide(cursor),
+  );
+  if (shouldDraw) {
+    appendHandRunePoint(runeCanvas, cursor);
+  } else if (runeTrace.activeStrokeIndex !== null) {
+    endRuneStroke(runeTrace);
+    handControlRuntime.lastRunePoint = null;
+    inputController.stopDrawing();
+    drawRuneTrace(runeCanvas, runeTrace);
+    renderInputState();
+  }
+}
+
 function stopHandTracking() {
   handTracker?.stop();
   handTracker = null;
   lastDetectedHandCount = -1;
-  const canvas = document.querySelector("#landmark-canvas");
+  resetHandControlRuntime();
   const placeholder = document.querySelector("#camera-placeholder");
-  if (canvas instanceof HTMLCanvasElement) clearHandLandmarks(canvas);
   if (placeholder instanceof HTMLElement) {
     placeholder.hidden = false;
     placeholder.textContent = "게임 시작 후 카메라 권한을 허용하면 손 인식이 시작됩니다.";
@@ -234,11 +470,15 @@ function stopHandTracking() {
 
 async function startHandTracking() {
   const video = document.querySelector("#hand-camera");
-  const canvas = document.querySelector("#landmark-canvas");
+  const runeCanvas = document.querySelector("#rune-canvas");
   const placeholder = document.querySelector("#camera-placeholder");
-  if (!(video instanceof HTMLVideoElement) || !(canvas instanceof HTMLCanvasElement)) return;
+  if (
+    !(video instanceof HTMLVideoElement)
+    || !(runeCanvas instanceof HTMLCanvasElement)
+  ) return;
   handTracker?.stop();
   lastDetectedHandCount = -1;
+  resetHandControlRuntime();
   handTracker = new HandTracker({
     video,
     onStatus: (message, state) => {
@@ -246,12 +486,18 @@ async function startHandTracking() {
       if (placeholder instanceof HTMLElement && state === "ready") placeholder.hidden = true;
     },
     onFrame: (result) => {
-      const handCount = drawHandLandmarks(canvas, video, result);
+      const handCount = result.landmarks?.length ?? 0;
       if (placeholder instanceof HTMLElement) placeholder.hidden = true;
+      const timestamp = performance.now();
+      if (handCount > 0) handControlRuntime.lastHandsSeenAt = timestamp;
+      updateHandGameplay(result, timestamp, runeCanvas);
       if (handCount === lastDetectedHandCount) return;
       lastDetectedHandCount = handCount;
+      const cameraName = handTracker?.cameraLabel ? `${handTracker.cameraLabel} · ` : "";
       setHandTrackerStatus(
-        handCount > 0 ? `MediaPipe 연결됨 · 손 ${handCount}개 인식 중` : "MediaPipe 연결됨 · 손을 카메라에 보여 주세요.",
+        handCount > 0
+          ? `${cameraName}MediaPipe 연결됨 · 손 ${handCount}개 인식 중`
+          : `${cameraName}MediaPipe 연결됨 · 손을 카메라에 보여 주세요.`,
         "ready",
       );
     },
@@ -290,8 +536,19 @@ function renderHelpGuidePage() {
   if (!page) return;
   if (guide instanceof HTMLElement) guide.dataset.text = String(Boolean(page.text));
   if (image instanceof HTMLImageElement) {
-    image.src = page.image;
+    image.hidden = false;
     image.alt = `게임 도움말 ${helpGuidePageIndex + 1}페이지`;
+    image.onload = () => {
+      image.hidden = false;
+      if (guide instanceof HTMLElement) guide.dataset.image = "true";
+    };
+    image.onerror = () => {
+      image.hidden = true;
+      image.removeAttribute("src");
+      image.alt = "";
+      if (guide instanceof HTMLElement) guide.dataset.image = "false";
+    };
+    image.src = page.image;
   }
   if (text instanceof HTMLElement) {
     text.textContent = page.text;
@@ -372,10 +629,13 @@ function playPendingCombatSounds() {
       playSpatialCue("bossDarkRelease", { distance, baseVolume: 1 });
     } else if (event.type === "boss-phase-two") {
       playSpatialCue("bossPhaseTwo", { distance, baseVolume: 0.92 });
+      enqueueBossDialogue("rampage");
     } else if (event.type === "boss-dark-area") {
       playSpatialCue("bossDarkArea", { distance, baseVolume: 0.95 });
+      enqueueBossDialogue("strongAttack", { cooldownMs: 7000 });
     } else if (event.type === "boss-summon") {
       playSpatialCue("bossSummon", { distance, baseVolume: 0.92 });
+      enqueueBossDialogue("summon", { cooldownMs: 5000 });
     } else if (event.type === "fire-meteor-impact") {
       playAudioCue("meteorImpact", { volume: 0.95 });
     } else if (event.type === "footstep") {
@@ -426,7 +686,11 @@ function clearNpcDialogueTimers() {
   npcDialogueTimers = [];
 }
 
-function enqueueNpcDialogue(message) {
+function enqueueNpcDialogue(message, {
+  faceSource = GAME_ASSETS.faces.npc,
+  speakerName = worldSession?.npc?.name ?? "스승 그리모어",
+  speakerType = "npc",
+} = {}) {
   const stack = document.querySelector("#npc-message");
   if (!(stack instanceof HTMLElement) || !message.trim()) return;
 
@@ -435,10 +699,11 @@ function enqueueNpcDialogue(message) {
   );
   const item = document.createElement("article");
   item.className = "npc-dialogue-item";
+  item.dataset.speaker = speakerType;
   const face = document.createElement("span");
   face.className = "npc-dialogue-face";
-  face.style.backgroundImage = `url(${GAME_ASSETS.faces.npc})`;
-  face.setAttribute("aria-label", worldSession?.npc?.name ?? "스승 그리모어");
+  face.style.backgroundImage = `url(${faceSource})`;
+  face.setAttribute("aria-label", speakerName);
   const bubble = document.createElement("p");
   bubble.className = "npc-dialogue-bubble";
   bubble.textContent = message;
@@ -464,6 +729,21 @@ function enqueueNpcDialogue(message) {
     npcDialogueTimers.push(removeTimer);
   }, Math.min(12500, 5600 + [...message].length * 105));
   npcDialogueTimers.push(fadeTimer);
+}
+
+function enqueueBossDialogue(dialogueId, { cooldownMs = 0 } = {}) {
+  const message = BOSS_DIALOGUES[dialogueId];
+  if (!message || !worldSession) return false;
+  worldSession.bossDialogueCooldowns ??= {};
+  const now = performance.now();
+  if ((worldSession.bossDialogueCooldowns[dialogueId] ?? 0) > now) return false;
+  worldSession.bossDialogueCooldowns[dialogueId] = now + Math.max(0, cooldownMs);
+  enqueueNpcDialogue(message, {
+    faceSource: GAME_ASSETS.entities["monster.spirit-king"],
+    speakerName: "타락한 정령왕",
+    speakerType: "boss",
+  });
+  return true;
 }
 
 /** 빈 문자열은 전체 대화를 정리하고, 문자열은 지속 시간형 말풍선으로 추가한다. */
@@ -498,7 +778,7 @@ function describeInputState() {
   }[inputController.state.mode];
   const castLabel = inputController.state.castType === "attack"
     ? "공격"
-    : inputController.state.castType === "defense" ? "방어" : "없음";
+    : "없음";
   return `입력 상태: ${modeLabel} · 시전: ${castLabel}`;
 }
 
@@ -518,7 +798,7 @@ function renderInputState() {
     runePanel.hidden = !isRuneMode || !gameStarted;
   }
   if (runeModeLabel) {
-    runeModeLabel.textContent = castType === "attack" ? "공격 룬" : "방어 룬";
+    runeModeLabel.textContent = "공격 룬";
   }
 }
 
@@ -530,10 +810,6 @@ function triggerRuneCardFlip(previousCastType, nextCastType) {
   panel.dataset.flipTo = nextCastType;
   requestAnimationFrame(() => panel.classList.add("is-flipping"));
   window.setTimeout(() => panel.classList.remove("is-flipping"), 620);
-}
-
-function getRunePoint(event, canvas) {
-  return normalizeRunePoint(event.clientX, event.clientY, canvas.getBoundingClientRect());
 }
 
 function createRunePolylines(card, skillTier = 1) {
@@ -577,7 +853,7 @@ function updateUltimatePresentationState() {
   const state = (worldSession?.player?.ultimateBuffMs ?? 0) > 0
     ? "active"
     : ultimateSequence ? "drawing" : "inactive";
-  document.documentElement.dataset.ultimateState = state;
+  setDocumentState("ultimateState", state);
 }
 
 function startUltimateDrawingAudio() {
@@ -618,7 +894,9 @@ function clearUltimateSequence() {
 }
 
 function reenterUltimateRuneMode() {
-  if (inputController.state.mode === GestureMode.EXPLORING) inputController.pressKey("1");
+  if (inputController.state.mode === GestureMode.EXPLORING) {
+    inputController.enterRuneMode("attack");
+  }
 }
 
 function hideRuneResult() {
@@ -823,6 +1101,7 @@ function handleUltimateRuneFinish(runeCanvas, result, runeStrokes) {
     stopUltimateDrawingAudio();
     startUltimateBuffAudio();
     inputController.exitRuneMode();
+    clearRuneAutoTarget();
     activeRuneCard = null;
     activeSkillTier = 1;
     clearRuneTrace(runeTrace);
@@ -852,12 +1131,10 @@ function getRuneTargetBounds(runeCanvas) {
   };
 }
 
-function isInsideRuneGuide(event) {
+function isInsideRuneGuide(point) {
   const guide = document.querySelector("#rune-guide-symbol");
   if (!(guide instanceof SVGElement)) return false;
-  const bounds = guide.getBoundingClientRect();
-  return event.clientX >= bounds.left && event.clientX <= bounds.right
-    && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+  return isScreenPointInsideRectangle(point, guide.getBoundingClientRect());
 }
 
 function evaluateRuneAttempt(runeCanvas) {
@@ -869,7 +1146,7 @@ function evaluateRuneAttempt(runeCanvas) {
     ? activeRuneCard.id === "electric" ? 150 : 170
     : activeSkillTier === 2 ? 150 : 100;
   const baseDamage = calculateRuneDamage(accuracy, maximumDamage);
-  const damage = Math.round(baseDamage * (worldSession?.player.attackMultiplier ?? 1) * 10) / 10;
+  const damage = calculatePlayerAttackDamage(baseDamage, worldSession?.player);
   return { accuracy, damage, succeeded: damage > 0 };
 }
 
@@ -967,37 +1244,59 @@ function updateMiniMapEntities() {
   }
 }
 
+function getPlayerHudElements() {
+  if (playerHudElements) return playerHudElements;
+  playerHudElements = {
+    resources: [
+      { key: "health", path: document.querySelector(".health-value"), readout: document.querySelector("#health-readout"), lastPercentage: null },
+      { key: "ultimate", path: document.querySelector(".ultimate-value"), readout: document.querySelector("#ultimate-readout"), lastPercentage: null },
+      { key: "mana", path: document.querySelector(".mana-value"), readout: document.querySelector("#mana-readout"), lastPercentage: null },
+    ],
+    goldReadout: document.querySelector("#gold-readout"),
+    portrait: document.querySelector(".portrait-hud .portrait"),
+    defenseTimer: document.querySelector("#defense-timer"),
+  };
+  return playerHudElements;
+}
+
 function updatePlayerHud() {
   if (!worldSession) return;
-  const resources = [
-    { key: "health", path: ".health-value", readout: "#health-readout" },
-    { key: "ultimate", path: ".ultimate-value", readout: "#ultimate-readout" },
-    { key: "mana", path: ".mana-value", readout: "#mana-readout" },
-  ];
+  setDocumentState("manaDraining",
+    inputController.state.mode === GestureMode.DRAWING,
+  );
+  setDocumentState("lowMana",
+    (worldSession.player.mana ?? 0) <= 30,
+  );
+  const { resources, goldReadout, portrait, defenseTimer } = getPlayerHudElements();
   for (const resource of resources) {
     const value = worldSession.player[resource.key] ?? 0;
     const maximum = worldSession.player[`maximum${resource.key[0].toUpperCase()}${resource.key.slice(1)}`] ?? 100;
     const percentage = Math.max(0, Math.min(100, maximum > 0 ? value / maximum * 100 : 0));
-    const path = document.querySelector(resource.path);
-    if (path instanceof SVGElement) path.style.strokeDasharray = `${percentage} ${100 - percentage}`;
-    const readout = document.querySelector(resource.readout);
-    if (readout) readout.textContent = resource.key === "health" && worldSession.player.infiniteHealth
+    if (resource.path instanceof SVGElement && resource.lastPercentage !== percentage) {
+      resource.path.style.strokeDasharray = `${percentage} ${100 - percentage}`;
+      resource.lastPercentage = percentage;
+    }
+    const nextReadout = resource.key === "health" && worldSession.player.infiniteHealth
       ? "∞"
       : String(Math.round(value * 10) / 10);
+    if (resource.readout && resource.readout.textContent !== nextReadout) {
+      resource.readout.textContent = nextReadout;
+    }
   }
-  const goldReadout = document.querySelector("#gold-readout");
-  if (goldReadout) goldReadout.textContent = `G: ${worldSession.player.infiniteGold ? "∞" : worldSession.player.gold ?? 0}`;
-  const portrait = document.querySelector(".portrait-hud .portrait");
+  const nextGoldReadout = `G: ${worldSession.player.infiniteGold ? "∞" : worldSession.player.gold ?? 0}`;
+  if (goldReadout && goldReadout.textContent !== nextGoldReadout) goldReadout.textContent = nextGoldReadout;
   if (portrait instanceof HTMLElement) {
-    portrait.textContent = "";
+    if (portrait.textContent) portrait.textContent = "";
     const faceSource = worldSession.player.health <= 30
       ? GAME_ASSETS.faces.playerInjured
       : GAME_ASSETS.faces.player;
-    portrait.style.backgroundImage = `url(${faceSource})`;
+    if (portrait.dataset.faceSource !== faceSource) {
+      portrait.dataset.faceSource = faceSource;
+      portrait.style.backgroundImage = `url(${faceSource})`;
+    }
     portrait.classList.toggle("is-hit", (worldSession.player.hitFlashMs ?? 0) > 0);
   }
-  document.documentElement.dataset.lowHealth = String(worldSession.player.health < 30);
-  const defenseTimer = document.querySelector("#defense-timer");
+  setDocumentState("lowHealth", worldSession.player.health < 30);
   if (defenseTimer instanceof HTMLElement) {
     const barrier = worldSession.player.defenseBarrier;
     defenseTimer.hidden = !barrier;
@@ -1032,6 +1331,7 @@ function createCombatStage({ nodeStage = 1, bossNode = false, nodeKey = null } =
   activeRuneCard = null;
   activeSkillTier = 1;
   inputController.exitRuneMode();
+  clearRuneAutoTarget();
   lastUltimateCardAvailable = false;
   setNpcMessage("");
   const random = createSeededRandom(Date.now());
@@ -1042,7 +1342,7 @@ function createCombatStage({ nodeStage = 1, bossNode = false, nodeKey = null } =
   const showNpc = combatNodeCount === 0 && !bossNode;
   worldSession = createWorldSession(dungeon, {
     playerProgress,
-    mouseRolesReversed: inputController.state.mouseRolesReversed,
+    handRolesReversed: inputController.state.handRolesReversed,
     showNpc,
   });
   combatState = createCombatState();
@@ -1089,7 +1389,6 @@ function createStage(nickname) {
   offeredShopItemKeys = new Set();
   runElapsedMs = 0;
   clearScreenOpen = false;
-  latestClearRecord = null;
   completedCombatRewardKeys = new Set();
   playerProgress = createPlayerProgress({ nickname });
   worldSession = null;
@@ -1213,6 +1512,7 @@ function openShop({ returnTarget = "exploration", shopKey = "default" } = {}) {
   gameStarted = false;
   setMenuOpen(false);
   inputController.exitRuneMode();
+  clearRuneAutoTarget();
   document.documentElement.dataset.screen = "shop";
   showOnlyScreen("shop-screen");
   const leaveButton = document.querySelector("#shop-leave-button");
@@ -1366,6 +1666,7 @@ function prepareForRouteScreen() {
   clearCombatState(combatState);
   setMenuOpen(false);
   inputController.exitRuneMode();
+  clearRuneAutoTarget();
   setNpcMessage("");
 }
 
@@ -1413,26 +1714,32 @@ export function completeCurrentStage() {
   showExplorationScreen();
 }
 
-function updateMouseRoleGuide() {
-  const reversed = inputController.state.mouseRolesReversed;
+function updateHandRoleGuide() {
+  const reversed = inputController.state.handRolesReversed;
   const guide = document.querySelector("#menu-input-guide");
   const swapButton = document.querySelector("#menu-swap-hands-button");
-  const runeCameraLabel = document.querySelector("#rune-camera-button-label");
-  const uiLabel = document.querySelector("#ui-button-label");
-  const menuMark = document.querySelector('[data-manual-ui="menu"]');
-  const miniMap = document.querySelector('[data-manual-ui="mini-map"]');
+  const drawingRole = document.querySelector("#drawing-hand-role");
+  const movementRole = document.querySelector("#movement-hand-role");
+  const runeInstruction = document.querySelector("#rune-mode-instruction");
+  const menuMark = document.querySelector('[data-gesture-ui="menu"]');
+  const miniMap = document.querySelector('[data-gesture-ui="mini-map"]');
   if (guide) {
     guide.textContent = reversed
-      ? "오른쪽: 룬/카메라 · 왼쪽: UI"
-      : "왼쪽: 룬/카메라 · 오른쪽: UI";
+      ? "WASD/방향키: 이동 · 좌클릭 드래그/Q·E: 카메라 · 양손 펼침: 룬 준비 · 오른손 주먹: 그리기"
+      : "WASD/방향키: 이동 · 좌클릭 드래그/Q·E: 카메라 · 양손 펼침: 룬 준비 · 왼손 주먹: 그리기";
   }
   if (swapButton) {
     swapButton.setAttribute("aria-pressed", String(reversed));
   }
-  if (runeCameraLabel) runeCameraLabel.textContent = reversed ? "우클릭" : "좌클릭";
-  if (uiLabel) uiLabel.textContent = reversed ? "좌클릭" : "우클릭";
-  menuMark?.setAttribute("aria-label", `메뉴: ${reversed ? "좌클릭" : "우클릭"}으로 열기`);
-  miniMap?.setAttribute("aria-label", `미니맵: ${reversed ? "좌클릭" : "우클릭"}으로 확대`);
+  if (drawingRole) drawingRole.textContent = reversed ? "왼손" : "오른손";
+  if (movementRole) movementRole.textContent = reversed ? "오른손" : "왼손";
+  if (runeInstruction) {
+    runeInstruction.textContent = reversed
+      ? "검지로 카드 선택 → 오른손 주먹으로 그리기 → 왼손 주먹으로 발동"
+      : "검지로 카드 선택 → 왼손 주먹으로 그리기 → 오른손 주먹으로 발동";
+  }
+  menuMark?.setAttribute("aria-label", "게임 메뉴 열기");
+  miniMap?.setAttribute("aria-label", "미니맵 클릭하여 확대");
 }
 
 function setMenuOpen(shouldOpen) {
@@ -1444,8 +1751,7 @@ function setMenuOpen(shouldOpen) {
   }
   if (!menuOpen) setHelpGuideOpen(false);
   if (menuOpen) {
-    cameraDrag = null;
-    for (const key of ["w", "a", "s", "d"]) inputController.releaseKey(key);
+    inputController.setSceneMovement({ x: 0, y: 0 });
   }
 }
 
@@ -1454,33 +1760,101 @@ function getCurrentBoss() {
   return (monstersByRoom[worldSession.currentRoomId] ?? []).find((monster) => monster.isBoss) ?? null;
 }
 
+function clearRuneAutoTarget() {
+  if (worldSession) {
+    worldSession.runeTargetId = null;
+    worldSession.runeTargetFocus = null;
+  }
+  setDocumentState("runeTarget", false);
+  if (lastRuneTargetOpacityCss !== "0") {
+    lastRuneTargetOpacityCss = "0";
+    document.documentElement.style.setProperty("--rune-target-opacity", "0");
+  }
+}
+
+function updateRuneAutoTarget(elapsedMs = 0) {
+  if (!worldSession || inputController.state.mode === GestureMode.EXPLORING) {
+    clearRuneAutoTarget();
+    return null;
+  }
+  const roomMonsters = monstersByRoom[worldSession.currentRoomId] ?? [];
+  let target = roomMonsters.find((monster) => (
+    monster.id === worldSession.runeTargetId
+    && (monster.currentHealth ?? monster.stats.health) > 0
+  ));
+  if (!target) target = findClosestLivingEnemy(worldSession.player, roomMonsters);
+  if (!target) {
+    clearRuneAutoTarget();
+    return null;
+  }
+
+  const targetPosition = target.position ?? target;
+  const targetAimPoint = getRuneTargetAimPoint(target);
+  worldSession.runeTargetId = target.id;
+  worldSession.runeTargetFocus = {
+    id: target.id,
+    ...targetAimPoint,
+  };
+  const targetYaw = calculateTargetYaw(worldSession.player, targetPosition);
+  worldSession.player.cameraYaw = interpolateTargetYaw(
+    worldSession.player.cameraYaw,
+    targetYaw,
+    elapsedMs,
+  );
+  const yawDifference = Math.abs(Math.atan2(
+    Math.sin(targetYaw - worldSession.player.cameraYaw),
+    Math.cos(targetYaw - worldSession.player.cameraYaw),
+  ));
+  const lockProgress = Math.max(0, Math.min(1, 1 - yawDifference / (10 * Math.PI / 180)));
+  const targetOpacityCss = (
+    lockProgress * Math.max(0, Math.min(1, worldSession.player.runeZoomProgress ?? 0))
+  ).toFixed(3);
+  setDocumentState("runeTarget", true);
+  if (targetOpacityCss !== lastRuneTargetOpacityCss) {
+    lastRuneTargetOpacityCss = targetOpacityCss;
+    document.documentElement.style.setProperty("--rune-target-opacity", targetOpacityCss);
+  }
+  return target;
+}
+
 function beginBossIntro(room) {
   const boss = getCurrentBoss();
   if (!boss || room.bossIntroPlayed) return;
   room.bossIntroPlayed = true;
+  worldSession.bossDialogueCooldowns = {};
   worldSession.bossCinematic = {
     active: true,
     elapsedMs: 0,
     durationMs: 5200,
     focus: boss.position,
+    combatDialogueShown: false,
   };
-  for (const key of ["w", "a", "s", "d"]) inputController.releaseKey(key);
+  inputController.setSceneMovement({ x: 0, y: 0 });
   const title = document.querySelector("#boss-intro-title");
   if (title instanceof HTMLElement) title.hidden = false;
   playAudioCue("bossIntro", { volume: 1 });
   startBackgroundMusic("boss");
+  enqueueBossDialogue("appearance");
   updateStatus("타락한 정령왕이 모습을 드러냈습니다.");
 }
 
-function updateBossPresentation(elapsedMs) {
-  const boss = getCurrentBoss();
-  const hud = document.querySelector("#boss-hud");
-  const title = document.querySelector("#boss-intro-title");
-  const fill = document.querySelector("#boss-health-fill");
+function getBossHudElements() {
+  if (bossHudElements) return bossHudElements;
+  bossHudElements = {
+    hud: document.querySelector("#boss-hud"),
+    title: document.querySelector("#boss-intro-title"),
+    fill: document.querySelector("#boss-health-fill"),
+    lastFillSize: "",
+  };
+  return bossHudElements;
+}
+
+function updateBossPresentation(elapsedMs, boss = getCurrentBoss()) {
+  const { hud, title, fill } = getBossHudElements();
   if (!(hud instanceof HTMLElement) || !(fill instanceof HTMLElement)) return false;
-  hud.hidden = !boss;
+  if (hud.hidden === Boolean(boss)) hud.hidden = !boss;
   if (!boss) {
-    if (title instanceof HTMLElement) title.hidden = true;
+    if (title instanceof HTMLElement && !title.hidden) title.hidden = true;
     return false;
   }
   const cinematic = worldSession.bossCinematic;
@@ -1489,15 +1863,29 @@ function updateBossPresentation(elapsedMs) {
     cinematic.elapsedMs = Math.min(cinematic.durationMs, cinematic.elapsedMs + elapsedMs);
     const progress = cinematic.elapsedMs / cinematic.durationMs;
     const introFill = Math.max(0, Math.min(1, (progress - 0.12) / 0.42));
-    fill.style.inlineSize = `${introFill * 100}%`;
-    if (title instanceof HTMLElement) title.hidden = progress > 0.68;
+    const fillSize = `${introFill * 100}%`;
+    if (bossHudElements.lastFillSize !== fillSize) {
+      fill.style.inlineSize = fillSize;
+      bossHudElements.lastFillSize = fillSize;
+    }
+    if (title instanceof HTMLElement && title.hidden !== (progress > 0.68)) {
+      title.hidden = progress > 0.68;
+    }
     if (cinematic.elapsedMs >= cinematic.durationMs) {
       cinematic.active = false;
-      if (title instanceof HTMLElement) title.hidden = true;
+      if (!cinematic.combatDialogueShown) {
+        cinematic.combatDialogueShown = true;
+        enqueueBossDialogue("combatStart");
+      }
+      if (title instanceof HTMLElement && !title.hidden) title.hidden = true;
     }
   } else {
-    fill.style.inlineSize = `${Math.max(0, boss.currentHealth / boss.maximumHealth) * 100}%`;
-    if (title instanceof HTMLElement) title.hidden = true;
+    const fillSize = `${Math.max(0, boss.currentHealth / boss.maximumHealth) * 100}%`;
+    if (bossHudElements.lastFillSize !== fillSize) {
+      fill.style.inlineSize = fillSize;
+      bossHudElements.lastFillSize = fillSize;
+    }
+    if (title instanceof HTMLElement && !title.hidden) title.hidden = true;
   }
   return wasActive;
 }
@@ -1512,34 +1900,9 @@ function setDeathDecisionOpen(shouldOpen) {
     gameStarted = false;
     setMenuOpen(false);
     inputController.exitRuneMode();
-    for (const key of ["w", "a", "s", "d"]) inputController.releaseKey(key);
+    clearRuneAutoTarget();
+    inputController.setSceneMovement({ x: 0, y: 0 });
   }
-}
-
-function formatClearTime(milliseconds) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const tenths = Math.floor((milliseconds % 1000) / 100);
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${tenths}`;
-}
-
-function loadClearRankings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("finger-mage-clear-rankings") ?? "[]");
-    return Array.isArray(saved) ? saved : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveClearRanking(record) {
-  const rankings = [...loadClearRankings(), record]
-    .filter((entry) => entry && typeof entry.nickname === "string" && Number.isFinite(entry.clearTimeMs))
-    .sort((left, right) => left.clearTimeMs - right.clearTimeMs)
-    .slice(0, 100);
-  try { localStorage.setItem("finger-mage-clear-rankings", JSON.stringify(rankings)); } catch {}
-  return rankings;
 }
 
 function showBossClearScreen() {
@@ -1550,51 +1913,29 @@ function showBossClearScreen() {
   gameStarted = false;
   setMenuOpen(false);
   inputController.exitRuneMode();
-  for (const key of ["w", "a", "s", "d"]) inputController.releaseKey(key);
-  latestClearRecord = {
-    nickname: worldSession.player.nickname ?? playerProgress.nickname ?? "마법사",
-    clearTimeMs: Math.round(runElapsedMs),
-    clearedAt: Date.now(),
-  };
-  saveClearRanking(latestClearRecord);
+  clearRuneAutoTarget();
+  inputController.setSceneMovement({ x: 0, y: 0 });
+  const nickname = worldSession.player.nickname ?? playerProgress.nickname ?? "마법사";
   const clearScreen = document.querySelector("#clear-screen");
-  const rankingScreen = document.querySelector("#ranking-screen");
-  const name = document.querySelector("#clear-player-name");
-  const time = document.querySelector("#clear-time");
-  if (name) name.textContent = latestClearRecord.nickname;
-  if (time) time.textContent = `클리어 시간 ${formatClearTime(latestClearRecord.clearTimeMs)}`;
+  const story = document.querySelector("#ending-story");
+  const thanks = document.querySelector("#ending-thanks");
+  if (story) {
+    story.textContent = [
+      "마지막 마법이 어둠을 갈랐다.",
+      "타락한 정령왕은 긴 폭주에서 깨어났고, 정령과 요정들은 잃었던 빛을 되찾았다.",
+      "돌아온 제자를 바라보며 스승 그리모어는 조용히 웃었다.",
+      "“잘 돌아왔구나. 나의 자랑스러운 제자여.”",
+      "그날부터 숲은 다시, 평화롭게 숨 쉬기 시작했다.",
+    ].join("\n\n");
+  }
+  if (thanks) thanks.textContent = `감사합니다, ${nickname}!`;
   if (clearScreen instanceof HTMLElement) clearScreen.hidden = false;
-  if (rankingScreen instanceof HTMLElement) rankingScreen.hidden = true;
   document.documentElement.dataset.gameCleared = "true";
-}
-
-function showRankingScreen() {
-  const clearScreen = document.querySelector("#clear-screen");
-  const rankingScreen = document.querySelector("#ranking-screen");
-  const list = document.querySelector("#ranking-list");
-  if (clearScreen instanceof HTMLElement) clearScreen.hidden = true;
-  if (rankingScreen instanceof HTMLElement) rankingScreen.hidden = false;
-  if (!(list instanceof HTMLOListElement)) return;
-  const rankings = loadClearRankings().sort((left, right) => left.clearTimeMs - right.clearTimeMs);
-  list.replaceChildren(...rankings.map((record) => {
-    const item = document.createElement("li");
-    const row = document.createElement("span");
-    row.className = "ranking-entry";
-    const nickname = document.createElement("strong");
-    nickname.textContent = record.nickname;
-    const time = document.createElement("time");
-    time.textContent = formatClearTime(record.clearTimeMs);
-    row.append(nickname, time);
-    item.append(row);
-    return item;
-  }));
 }
 
 function hideClearOverlays() {
   const clearScreen = document.querySelector("#clear-screen");
-  const rankingScreen = document.querySelector("#ranking-screen");
   if (clearScreen instanceof HTMLElement) clearScreen.hidden = true;
-  if (rankingScreen instanceof HTMLElement) rankingScreen.hidden = true;
   clearScreenOpen = false;
   document.documentElement.dataset.gameCleared = "false";
 }
@@ -1614,6 +1955,8 @@ function restartAtSpawnPoint() {
   worldSession.bossCinematic = null;
   setDeathDecisionOpen(false);
   gameStarted = true;
+  manualInputState.reset();
+  applyManualExplorationInput();
   startBackgroundMusic("normal");
   document.documentElement.dataset.screen = "game";
   showOnlyScreen("world-ui");
@@ -1624,6 +1967,8 @@ function restartAtSpawnPoint() {
 
 function returnToTitle() {
   gameStarted = false;
+  manualInputState.reset();
+  applyManualExplorationInput();
   stopHandTracking();
   stopBackgroundMusic();
   clearUltimateSequence();
@@ -1633,11 +1978,13 @@ function returnToTitle() {
   clearCombatState(combatState);
   setMenuOpen(false);
   inputController.exitRuneMode();
+  clearRuneAutoTarget();
   setNpcMessage("");
   if (spawnPointNoticeTimer) window.clearTimeout(spawnPointNoticeTimer);
   document.querySelector("#spawn-point-notice")?.setAttribute("hidden", "");
   document.documentElement.dataset.screen = "title";
   document.documentElement.dataset.lowHealth = "false";
+  document.documentElement.dataset.manaDraining = "false";
   document.documentElement.dataset.bossPhaseTwo = "false";
   document.documentElement.dataset.ultimateState = "inactive";
   showOnlyScreen("title-screen");
@@ -1645,15 +1992,17 @@ function returnToTitle() {
 }
 
 function startGame(nickname) {
+  manualInputState.reset();
+  applyManualExplorationInput();
   createStage(nickname);
   setMenuOpen(false);
   document.documentElement.dataset.screen = "game";
-  updateStatus(`대체 입력 준비 완료 · ${dungeon.rooms.length}개 방이 생성됐습니다.`);
-  updateMouseRoleGuide();
+  updateStatus(`손짓 입력 준비 완료 · ${dungeon.rooms.length}개 방이 생성됐습니다.`);
+  updateHandRoleGuide();
   renderInputState();
   const preview = new URLSearchParams(window.location.search).get("preview");
   if (preview === "boss") {
-    createCombatStage({ nodeStage: 7, bossNode: true, nodeKey: "preview-boss" });
+    createCombatStage({ nodeStage: 6, bossNode: true, nodeKey: "preview-boss" });
     worldSession.currentRoomId = dungeon.bossRoomId;
     worldSession.visitedRoomIds.add(dungeon.shopRoomId);
     worldSession.visitedRoomIds.add(dungeon.bossRoomId);
@@ -1800,7 +2149,7 @@ function openDeveloperConsole() {
   developerConsoleWasGameStarted = gameStarted;
   gameStarted = false;
   setMenuOpen(false);
-  for (const key of ["w", "a", "s", "d"]) inputController.releaseKey(key);
+  inputController.setSceneMovement({ x: 0, y: 0 });
   panel.hidden = false;
   setDeveloperConsoleStatus("명령어를 입력하세요.");
   if (input instanceof HTMLInputElement) {
@@ -1830,7 +2179,7 @@ function grantAllMagicCards() {
 }
 
 function jumpToDeveloperBoss() {
-  createCombatStage({ nodeStage: 7, bossNode: true, nodeKey: `developer-boss-${Date.now()}` });
+  createCombatStage({ nodeStage: 6, bossNode: true, nodeKey: `developer-boss-${Date.now()}` });
   const shopRoom = dungeon.roomById[dungeon.shopRoomId];
   const bossRoom = dungeon.roomById[dungeon.bossRoomId];
   if (shopRoom?.campfire) saveCampfireSpawnPoint(worldSession, shopRoom);
@@ -1843,6 +2192,29 @@ function jumpToDeveloperBoss() {
   renderMiniMap();
   beginBossIntro(bossRoom);
   updateBossPresentation(0);
+}
+
+function jumpToClearedStageEnd() {
+  const result = clearStageEndRoom({ dungeon, session: worldSession, monstersByRoom });
+  if (!result) {
+    setDeveloperConsoleStatus("현재 맵에는 황금방이 없습니다.");
+    return false;
+  }
+  closeDeveloperConsole({ restoreGame: false });
+  inputController.exitRuneMode();
+  clearRuneAutoTarget();
+  clearCombatState(combatState);
+  currentStagePortalId = null;
+  gameStarted = true;
+  document.documentElement.dataset.screen = "game";
+  showOnlyScreen("world-ui");
+  startBackgroundMusic("normal");
+  renderMiniMap();
+  updatePlayerHud();
+  renderRuneSelection();
+  renderInputState();
+  updateStatus(`개발자 명령으로 황금방 이동 · 적 ${result.defeatedCount}마리 처치 · 통로 개방`);
+  return true;
 }
 
 function executeDeveloperCommand(command) {
@@ -1860,11 +2232,15 @@ function executeDeveloperCommand(command) {
     jumpToDeveloperBoss();
     return;
   }
+  if (command === "/단계클리어") {
+    jumpToClearedStageEnd();
+    return;
+  }
   const stageMatch = command.match(/^\/(\d+)단계$/);
   if (stageMatch) {
     const stage = Number(stageMatch[1]);
-    if (!Number.isInteger(stage) || stage < 1 || stage > 7) {
-      setDeveloperConsoleStatus("전투 단계는 1단계부터 7단계까지 입력해 주세요.");
+    if (!Number.isInteger(stage) || stage < 1 || stage > 6) {
+      setDeveloperConsoleStatus("전투 단계는 1단계부터 6단계까지 입력해 주세요.");
       return;
     }
     closeDeveloperConsole({ restoreGame: false });
@@ -1893,6 +2269,12 @@ function executeDeveloperCommand(command) {
     copyProgressToPlayer(playerProgress, worldSession.player);
     updatePlayerHud();
     setDeveloperConsoleStatus("체력 무한을 활성화했습니다.");
+    return;
+  }
+  if (command === "/공격력무한") {
+    syncProgressFromWorld();
+    setDeveloperAttackPower(playerProgress, worldSession.player);
+    setDeveloperConsoleStatus("플레이어 공격력을 10000으로 설정했습니다.");
     return;
   }
   if (command === "/돈무한") {
@@ -1935,207 +2317,238 @@ function setupDeveloperConsole() {
   });
 }
 
-function setupManualControls(runeCanvas) {
-  window.addEventListener("keydown", (event) => {
-    if (!gameStarted) {
-      return;
-    }
-    if (menuOpen) {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-        updateStatus("게임으로 돌아왔습니다.");
-      }
-      return;
-    }
-    if (event.key === "Escape" && inputController.state.mode === GestureMode.EXPLORING) {
-      setMenuOpen(true);
-      updateStatus("게임 메뉴를 열었습니다.");
-      return;
-    }
-    if (event.repeat && !["w", "a", "s", "d"].includes(event.key.toLowerCase())) {
-      return;
-    }
+function beginHandRuneMode(castType, runeCanvas) {
+  if (!(runeCanvas instanceof HTMLCanvasElement)) return false;
+  if (!hasEnoughManaToCast(worldSession?.player)) {
+    showManaEmptyNotice();
+    updateStatus("마나가 30 이하라 마법을 시전할 수 없습니다.");
+    return false;
+  }
+  if ((worldSession?.player.castCooldownMs ?? 0) > 0) {
+    updateStatus(`마법 재사용 대기시간 ${Math.ceil(worldSession.player.castCooldownMs / 100) / 10}초`);
+    return false;
+  }
+  const previousCastType = inputController.state.castType;
+  if (!inputController.enterRuneMode(castType)) return false;
+  updateRuneAutoTarget();
+  triggerRuneCardFlip(previousCastType, castType);
+  resetRuneSelection(runeCanvas);
+  updateStatus("공격 룬 준비 · 사용할 카드를 클릭하세요.");
+  renderInputState();
+  return true;
+}
 
-    if (
-      (event.key === "1" || event.key === "2")
-      && inputController.state.mode === GestureMode.EXPLORING
-      && (worldSession?.player.castCooldownMs ?? 0) > 0
-    ) {
-      updateStatus(`마법 재사용 대기시간 ${Math.ceil(worldSession.player.castCooldownMs / 100) / 10}초`);
-      return;
-    }
+function cancelHandRuneCast(runeCanvas, { insufficientMana = false } = {}) {
+  if (!(runeCanvas instanceof HTMLCanvasElement)) return;
+  endRuneStroke(runeTrace);
+  handControlRuntime.lastRunePoint = null;
+  inputController.exitRuneMode();
+  clearRuneAutoTarget();
+  resetRuneSelection(runeCanvas);
+  renderInputState();
+  if (castNoticeTimer) window.clearTimeout(castNoticeTimer);
+  castNoticeTimer = null;
+  const castNotice = document.querySelector("#world-cast-notice");
+  if (castNotice instanceof HTMLElement) {
+    castNotice.classList.remove("is-showing");
+    castNotice.hidden = true;
+  }
+  if (insufficientMana) {
+    showManaEmptyNotice();
+    updateStatus("마나가 0이 되어 진행 중인 마법 시전이 취소됐습니다.");
+  } else {
+    updateStatus("마법 시전을 취소했습니다.");
+  }
+}
 
-    const previousCastType = inputController.state.castType;
-    const selectedCard = activeRuneCard;
-    const selectedSkillTier = activeSkillTier;
-    const action = inputController.pressKey(event.key);
-    if (!action) {
-      return;
-    }
-    if (action === "attack-rune" || action === "defense-rune") {
-      triggerRuneCardFlip(previousCastType, inputController.state.castType);
-      resetRuneSelection(runeCanvas);
-      updateStatus("아래에서 사용할 속성 카드를 선택하세요.");
-    } else if (action === "cancel-rune") {
-      runePointerId = null;
-      endRuneStroke(runeTrace);
-      resetRuneSelection(runeCanvas);
-      updateStatus("룬 입력을 취소하고 탐험으로 돌아왔습니다.");
-    } else if (action === "finish-rune") {
-      runePointerId = null;
-      endRuneStroke(runeTrace);
-      const runeStrokes = getLocalRuneStrokes(runeCanvas);
-      const result = evaluateRuneAttempt(runeCanvas);
-      if (selectedCard?.isUltimate) {
-        handleUltimateRuneFinish(runeCanvas, result, runeStrokes);
-        renderInputState();
-        return;
-      }
-      if (result?.succeeded && selectedCard && worldSession) {
-        if (previousCastType === "defense") {
-          spawnPlayerDefense(combatState, worldSession, selectedCard.id, { runeStrokes });
-          playMagicAudio(selectedCard.id, { defense: true });
-        } else {
-          spawnPlayerMagic(combatState, worldSession, selectedCard.id, {
-            damage: result.damage,
-            runeStrokes,
-            room: dungeon?.roomById[worldSession.currentRoomId] ?? null,
-            skillTier: selectedSkillTier,
-            monsters: monstersByRoom[worldSession.currentRoomId] ?? [],
-          });
-          if (selectedSkillTier === 3 && selectedCard.id === "light") {
-            playMagicAudio(selectedCard.id, { playElement: false });
-            playFadingAudioCue("lightBeam", { durationMs: 3000, fadeOutMs: 850, volume: 0.92 });
-          } else if (selectedSkillTier === 3 && selectedCard.id === "water") {
-            playMagicAudio(selectedCard.id, { playElement: false });
-            playAudioCue("waterWave", { volume: 0.96 });
-          } else if (selectedSkillTier === 3 && selectedCard.id === "electric") {
-            playMagicAudio(selectedCard.id, { playElement: false });
-            playAudioCue("electricThird", { volume: 0.96 });
-          } else {
-            playMagicAudio(selectedCard.id, { playElement: selectedCard.id !== "rock" });
-          }
-        }
-        startPlayerCastCooldown(worldSession.player);
-        runeRefreshUsesRemaining = Math.max(0, runeRefreshUsesRemaining - 1);
-        showWorldCastNotice(selectedCard, result.accuracy, {
-          damage: result.damage,
-          defense: previousCastType === "defense",
-        });
-        updateStatus(previousCastType === "defense"
-          ? `${selectedCard.label} 방어막 발동 · 3초 지속 · 정확도 ${result.accuracy}%`
-          : `${selectedCard.label} 마법 발동 · 피해 ${result.damage} · 정확도 ${result.accuracy}%`);
-      } else if (result && selectedCard) {
-        showWorldCastNotice(selectedCard, result.accuracy, { failed: true });
-        updateStatus(`마법 실패 · 그림 정확도 ${result.accuracy}% · 30%를 넘어야 합니다.`);
-      } else {
-        updateStatus("카드와 룬 궤적이 없어 시전을 취소했습니다.");
-      }
-      if (selectedCard && result) {
-        rotateUsedRuneCard(runeDeck, selectedCard.deckId ?? selectedCard.id);
-        renderRuneCards();
-      }
-      activeRuneCard = null;
-      activeSkillTier = 1;
-      clearRuneTrace(runeTrace);
-      drawRuneTrace(runeCanvas, runeTrace);
-      renderRuneSelection();
-    }
+function finishHandRuneCast(runeCanvas) {
+  if (!(runeCanvas instanceof HTMLCanvasElement)) return;
+  const selectedCard = activeRuneCard;
+  const selectedSkillTier = activeSkillTier;
+  endRuneStroke(runeTrace);
+  handControlRuntime.lastRunePoint = null;
+  if (countRunePoints(runeTrace) < 2) {
+    cancelHandRuneCast(runeCanvas);
+    return;
+  }
+  if (!hasManaRemaining(worldSession?.player)) {
+    cancelHandRuneCast(runeCanvas, { insufficientMana: true });
+    return;
+  }
+  const runeStrokes = getLocalRuneStrokes(runeCanvas);
+  const result = evaluateRuneAttempt(runeCanvas);
+  inputController.exitRuneMode();
+  clearRuneAutoTarget();
+
+  if (selectedCard?.isUltimate) {
+    handleUltimateRuneFinish(runeCanvas, result, runeStrokes);
     renderInputState();
-  });
-
-  window.addEventListener("keyup", (event) => inputController.releaseKey(event.key));
-  window.addEventListener("blur", () => {
-    for (const key of ["w", "a", "s", "d"]) {
-      inputController.releaseKey(key);
+    return;
+  }
+  if (result?.succeeded && selectedCard && worldSession) {
+    spawnPlayerMagic(combatState, worldSession, selectedCard.id, {
+      damage: result.damage,
+      runeStrokes,
+      room: dungeon?.roomById[worldSession.currentRoomId] ?? null,
+      skillTier: selectedSkillTier,
+      monsters: monstersByRoom[worldSession.currentRoomId] ?? [],
+    });
+    if (selectedSkillTier === 3 && selectedCard.id === "light") {
+      playMagicAudio(selectedCard.id, { playElement: false });
+      playFadingAudioCue("lightBeam", { durationMs: 3000, fadeOutMs: 850, volume: 0.92 });
+    } else if (selectedSkillTier === 3 && selectedCard.id === "water") {
+      playMagicAudio(selectedCard.id, { playElement: false });
+      playAudioCue("waterWave", { volume: 0.96 });
+    } else if (selectedSkillTier === 3 && selectedCard.id === "electric") {
+      playMagicAudio(selectedCard.id, { playElement: false });
+      playAudioCue("electricThird", { volume: 0.96 });
+    } else {
+      playMagicAudio(selectedCard.id, { playElement: selectedCard.id !== "rock" });
     }
-    runePointerId = null;
-    endRuneStroke(runeTrace);
-    cameraDrag = null;
-  });
+    startPlayerCastCooldown(worldSession.player);
+    runeRefreshUsesRemaining = Math.max(0, runeRefreshUsesRemaining - 1);
+    showWorldCastNotice(selectedCard, result.accuracy, {
+      damage: result.damage,
+    });
+    updateStatus(`${selectedCard.label} 마법 발동 · 피해 ${result.damage} · 정확도 ${result.accuracy}%`);
+  } else if (result && selectedCard) {
+    showWorldCastNotice(selectedCard, result.accuracy, { failed: true });
+    updateStatus(`마법 실패 · 그림 정확도 ${result.accuracy}% · 30%를 넘어야 합니다.`);
+  } else {
+    updateStatus("카드와 룬 궤적이 없어 시전을 취소했습니다.");
+  }
+  if (selectedCard && result) {
+    rotateUsedRuneCard(runeDeck, selectedCard.deckId ?? selectedCard.id);
+    renderRuneCards();
+  }
+  activeRuneCard = null;
+  activeSkillTier = 1;
+  clearRuneTrace(runeTrace);
+  drawRuneTrace(runeCanvas, runeTrace);
+  renderRuneSelection();
+  renderInputState();
+}
 
-  window.addEventListener("pointerdown", (event) => {
-    if (!gameStarted || menuOpen || event.button !== inputController.getRuneAndCameraButton()) {
-      return;
-    }
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("button, [data-manual-ui]")) return;
-    if (inputController.state.mode === GestureMode.RUNE_READY || inputController.state.mode === GestureMode.DRAWING) {
-      if (!activeRuneCard) {
-        updateStatus("먼저 아래에서 속성 카드를 선택하세요.");
-        return;
+function applyManualExplorationInput() {
+  inputController.setSceneInput(manualInputState.getSceneInput());
+}
+
+function setupManualExplorationControls() {
+  const isTextEntry = (target) => (
+    target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target?.isContentEditable
+  );
+
+  window.addEventListener("keydown", (event) => {
+    if (isTextEntry(event.target)) return;
+    if (event.key === "Escape" && gameStarted) {
+      const helpGuide = document.querySelector("#help-guide");
+      if (helpGuide instanceof HTMLElement && !helpGuide.hidden) {
+        setHelpGuideOpen(false);
+      } else {
+        setMenuOpen(!menuOpen);
       }
-      if (!isInsideRuneGuide(event)) return;
-      if (inputController.state.mode === GestureMode.RUNE_READY) {
-        clearRuneTrace(runeTrace);
-        drawRuneTrace(runeCanvas, runeTrace);
-        inputController.startDrawing();
-        renderInputState();
-      }
-      hideRuneResult();
-      runePointerId = event.pointerId;
-      beginRuneStroke(runeTrace, getRunePoint(event, runeCanvas));
-      drawRuneTrace(runeCanvas, runeTrace);
       event.preventDefault();
       return;
     }
-    if (inputController.state.mode === GestureMode.EXPLORING) {
-      cameraDrag = { pointerId: event.pointerId, button: event.button, lastX: event.clientX };
-      document.documentElement.dataset.cameraDragging = "true";
-    }
-  });
-
-  window.addEventListener("pointermove", (event) => {
-    if (!gameStarted || menuOpen) return;
-    if (inputController.state.mode === GestureMode.DRAWING && runePointerId === event.pointerId) {
-      appendRunePoint(runeTrace, getRunePoint(event, runeCanvas));
-      drawRuneTrace(runeCanvas, runeTrace);
-    } else if (cameraDrag?.pointerId === event.pointerId && worldSession) {
-      const deltaX = event.clientX - cameraDrag.lastX;
-      cameraDrag.lastX = event.clientX;
-      rotateWorldCamera(worldSession, deltaX * 0.006);
-      event.preventDefault();
-    }
-  });
-
-  window.addEventListener("pointerup", (event) => {
-    if (!gameStarted || menuOpen) return;
-    const runeButton = inputController.getRuneAndCameraButton();
-    if (event.button === runeButton && runePointerId === event.pointerId) {
-      appendRunePoint(runeTrace, getRunePoint(event, runeCanvas));
-      endRuneStroke(runeTrace);
-      runePointerId = null;
-      drawRuneTrace(runeCanvas, runeTrace);
-    }
-    if (cameraDrag?.pointerId === event.pointerId && cameraDrag.button === event.button) {
-      cameraDrag = null;
-      delete document.documentElement.dataset.cameraDragging;
-    }
-
-    if (event.button !== inputController.getUiButton()) return;
-    const target = event.target instanceof Element ? event.target.closest("[data-manual-ui]") : null;
-    if (!target || !(target instanceof HTMLElement)) return;
+    if (!manualInputState.setKey(event.code, true)) return;
     event.preventDefault();
-    const uiItemId = target.dataset.manualUi;
-    if (!uiItemId || !inputController.selectUi(uiItemId)) {
-      updateStatus("룬 모드에서는 UI를 조작할 수 없습니다.");
-      return;
-    }
-    if (uiItemId === "menu") {
-      setMenuOpen(true);
-      updateStatus("게임 메뉴를 열었습니다.");
-    } else if (uiItemId === "mini-map") {
-      target.classList.toggle("is-expanded");
-      updateStatus(target.classList.contains("is-expanded") ? "미니맵을 확대했습니다." : "미니맵을 축소했습니다.");
-    }
+    applyManualExplorationInput();
   });
 
-  window.addEventListener("contextmenu", (event) => {
-    if (gameStarted) event.preventDefault();
+  window.addEventListener("keyup", (event) => {
+    if (!manualInputState.setKey(event.code, false)) return;
+    event.preventDefault();
+    applyManualExplorationInput();
+  });
+
+  window.addEventListener("blur", () => {
+    manualInputState.reset();
+    applyManualExplorationInput();
+  });
+}
+
+function setupPointerCameraControls(worldCanvas) {
+  let activePointerId = null;
+  let lastPointerX = 0;
+
+  const endDrag = (event = null) => {
+    if (event && activePointerId !== null && event.pointerId !== activePointerId) return;
+    if (activePointerId !== null && worldCanvas.hasPointerCapture?.(activePointerId)) {
+      worldCanvas.releasePointerCapture(activePointerId);
+    }
+    activePointerId = null;
+    document.documentElement.dataset.cameraDragging = "false";
+  };
+
+  worldCanvas.addEventListener("pointerdown", (event) => {
+    if (
+      event.button !== 0
+      || !gameStarted
+      || menuOpen
+      || inputController.state.mode !== GestureMode.EXPLORING
+      || worldSession?.bossCinematic?.active
+    ) return;
+    activePointerId = event.pointerId;
+    lastPointerX = event.clientX;
+    worldCanvas.setPointerCapture?.(event.pointerId);
+    document.documentElement.dataset.cameraDragging = "true";
+    event.preventDefault();
+  });
+
+  worldCanvas.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== activePointerId) return;
+    if (
+      !worldSession
+      || menuOpen
+      || inputController.state.mode !== GestureMode.EXPLORING
+    ) {
+      endDrag(event);
+      return;
+    }
+    const deltaX = event.clientX - lastPointerX;
+    lastPointerX = event.clientX;
+    rotateWorldCamera(worldSession, calculatePointerCameraTurn(deltaX));
+    event.preventDefault();
+  });
+
+  worldCanvas.addEventListener("pointerup", endDrag);
+  worldCanvas.addEventListener("pointercancel", endDrag);
+  window.addEventListener("blur", () => endDrag());
+
+  document.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+  });
+  window.addEventListener("pointerdown", (event) => {
+    if (event.button !== 2) return;
+    endDrag();
+    event.preventDefault();
+  }, { capture: true });
+}
+
+function setupGestureControls(runeCanvas) {
+  document.querySelector('[data-gesture-ui="menu"]')?.addEventListener("click", () => {
+    setMenuOpen(true);
+    updateStatus("게임 메뉴를 열었습니다.");
+  });
+  const miniMap = document.querySelector('[data-gesture-ui="mini-map"]');
+  const toggleMiniMap = () => {
+    if (!(miniMap instanceof HTMLElement)) return;
+    miniMap.classList.toggle("is-expanded");
+    updateStatus(miniMap.classList.contains("is-expanded") ? "미니맵을 확대했습니다." : "미니맵을 축소했습니다.");
+  };
+  miniMap?.addEventListener("click", toggleMiniMap);
+  miniMap?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleMiniMap();
   });
 
   document.querySelector("#menu-resume-button")?.addEventListener("click", () => {
     setMenuOpen(false);
+    applyManualExplorationInput();
     updateStatus("게임으로 돌아왔습니다.");
   });
   document.querySelector("#menu-settings-button")?.addEventListener("click", () => {
@@ -2158,45 +2571,32 @@ function setupManualControls(runeCanvas) {
     helpGuidePageIndex = Math.min(HELP_GUIDE_PAGES.length - 1, helpGuidePageIndex + 1);
     renderHelpGuidePage();
   });
-  window.addEventListener("keydown", (event) => {
-    const guide = document.querySelector("#help-guide");
-    if (!(guide instanceof HTMLElement) || guide.hidden) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setHelpGuideOpen(false);
-    } else if (event.key === "ArrowLeft") {
-      helpGuidePageIndex = Math.max(0, helpGuidePageIndex - 1);
-      renderHelpGuidePage();
-    } else if (event.key === "ArrowRight") {
-      helpGuidePageIndex = Math.min(HELP_GUIDE_PAGES.length - 1, helpGuidePageIndex + 1);
-      renderHelpGuidePage();
-    }
-  });
   document.querySelector("#menu-swap-hands-button")?.addEventListener("click", () => {
-    const reversed = inputController.toggleMouseRoles();
+    const reversed = inputController.toggleHandRoles();
+    try {
+      localStorage.setItem("finger-mage-hand-roles-reversed", String(reversed));
+    } catch {
+      // 저장소가 막혀 있어도 현재 플레이에서는 반전 상태가 유지된다.
+    }
+    resetHandControlRuntime({ preserveLastSeen: true });
     if (worldSession && !npcConversationStarted) {
       worldSession.npc.dialogues = createGuideDialogues({
         nickname: worldSession.player.nickname,
-        mouseRolesReversed: reversed,
+        handRolesReversed: reversed,
       });
     }
-    updateMouseRoleGuide();
-    updateStatus(reversed ? "마우스 역할을 반전했습니다. 왼쪽은 UI, 오른쪽은 룬과 카메라입니다." : "기본 마우스 역할로 돌아왔습니다.");
+    updateHandRoleGuide();
+    updateStatus(reversed
+      ? "손 역할을 반전했습니다. 왼손은 룬·UI·발동, 오른손 주먹은 룬 그리기입니다."
+      : "기본 손 역할로 돌아왔습니다. 오른손은 룬·UI·발동, 왼손 주먹은 룬 그리기입니다.");
   });
   document.querySelector("#menu-exit-button")?.addEventListener("click", () => {
     returnToTitle();
   });
   document.querySelector("#death-respawn-button")?.addEventListener("click", restartAtSpawnPoint);
   document.querySelector("#death-exit-button")?.addEventListener("click", returnToTitle);
-  document.querySelector("#clear-next-button")?.addEventListener("click", showRankingScreen);
-  document.querySelector("#ranking-previous-button")?.addEventListener("click", () => {
-    const clearScreen = document.querySelector("#clear-screen");
-    const rankingScreen = document.querySelector("#ranking-screen");
-    if (clearScreen instanceof HTMLElement) clearScreen.hidden = false;
-    if (rankingScreen instanceof HTMLElement) rankingScreen.hidden = true;
-  });
-  document.querySelector("#ranking-title-button")?.addEventListener("click", returnToTitle);
-  document.querySelector("#ranking-exit-button")?.addEventListener("click", () => {
+  document.querySelector("#clear-title-button")?.addEventListener("click", returnToTitle);
+  document.querySelector("#clear-exit-button")?.addEventListener("click", () => {
     window.close();
     returnToTitle();
     const titleStatus = document.querySelector("#title-status");
@@ -2218,6 +2618,7 @@ function setupManualControls(runeCanvas) {
       }
       currentStagePortalId = null;
       gameStarted = true;
+      applyManualExplorationInput();
       document.documentElement.dataset.screen = "game";
       showOnlyScreen("world-ui");
       updateStatus(shopReturnTarget === "boss-map"
@@ -2238,9 +2639,25 @@ function setupManualControls(runeCanvas) {
 
 function bootApp() {
   document.documentElement.dataset.appVersion = APP_VERSION;
-  document.documentElement.dataset.inputSource = "keyboard-mouse";
+  document.documentElement.dataset.inputSource = "hybrid-camera-keyboard";
   document.documentElement.dataset.screen = "title";
   document.documentElement.dataset.menuOpen = "false";
+  document.documentElement.dataset.cameraDragging = "false";
+  try {
+    const storedSchema = localStorage.getItem("finger-mage-hand-control-schema");
+    const shouldResetRoles = storedSchema !== HAND_CONTROL_SCHEMA_VERSION;
+    inputController.setHandRolesReversed(
+      shouldResetRoles
+        ? false
+        : localStorage.getItem("finger-mage-hand-roles-reversed") === "true",
+    );
+    if (shouldResetRoles) {
+      localStorage.setItem("finger-mage-hand-control-schema", HAND_CONTROL_SCHEMA_VERSION);
+      localStorage.setItem("finger-mage-hand-roles-reversed", "false");
+    }
+  } catch {
+    inputController.setHandRolesReversed(false);
+  }
   const worldCanvas = document.querySelector("#world-canvas");
   const runeCanvas = document.querySelector("#rune-canvas");
   if (!(worldCanvas instanceof HTMLCanvasElement) || !(runeCanvas instanceof HTMLCanvasElement)) {
@@ -2251,24 +2668,42 @@ function bootApp() {
   setupAudioSettings();
   setupVideoSettings();
   setupRuneCards(runeCanvas);
-  setupManualControls(runeCanvas);
+  setupManualExplorationControls();
+  setupPointerCameraControls(worldCanvas);
+  setupGestureControls(runeCanvas);
   setupDeveloperConsole();
   window.addEventListener("beforeunload", stopHandTracking, { once: true });
-  updateMouseRoleGuide();
+  updateHandRoleGuide();
   renderInputState();
   const gameLoop = (timestamp) => {
     const elapsedMs = Math.min(timestamp - lastSceneFrameTime, 100);
     lastSceneFrameTime = timestamp;
     if (gameStarted && dungeon && worldSession) {
-      const bossPhaseTwo = isBossPhaseTwo(getCurrentBoss());
-      document.documentElement.dataset.bossPhaseTwo = String(bossPhaseTwo);
+      miniMapUpdateAccumulatorMs += elapsedMs;
+      hudUpdateAccumulatorMs += elapsedMs;
+      worldRenderAccumulatorMs = Math.min(
+        WORLD_RENDER_INTERVAL_MS * 2,
+        worldRenderAccumulatorMs + elapsedMs,
+      );
+      const currentBoss = getCurrentBoss();
+      const bossPhaseTwo = isBossPhaseTwo(currentBoss);
+      setDocumentState("bossPhaseTwo", bossPhaseTwo);
       updateUltimatePresentationState();
       const previousRoomId = worldSession.currentRoomId;
-      const cinematicActive = updateBossPresentation(elapsedMs);
-      const zoomTarget = inputController.state.mode === GestureMode.DRAWING ? 1 : 0;
+      const cinematicActive = updateBossPresentation(elapsedMs, currentBoss);
+      updateRuneAutoTarget(elapsedMs);
+      const zoomTarget = inputController.state.mode === GestureMode.EXPLORING ? 0 : 1;
       const zoomProgress = worldSession.player.runeZoomProgress ?? 0;
       const zoomStep = Math.min(1, elapsedMs / (zoomTarget > zoomProgress ? 260 : 360));
-      worldSession.player.runeZoomProgress = zoomProgress + (zoomTarget - zoomProgress) * zoomStep;
+      const interpolatedZoom = zoomProgress + (zoomTarget - zoomProgress) * zoomStep;
+      worldSession.player.runeZoomProgress = Math.abs(zoomTarget - interpolatedZoom) < 0.001
+        ? zoomTarget
+        : interpolatedZoom;
+      const runeViewProgressCss = worldSession.player.runeZoomProgress.toFixed(4);
+      if (runeViewProgressCss !== lastRuneViewProgressCss) {
+        lastRuneViewProgressCss = runeViewProgressCss;
+        document.documentElement.style.setProperty("--rune-view-progress", runeViewProgressCss);
+      }
       if (!menuOpen && !cinematicActive) runElapsedMs += elapsedMs;
       if (!menuOpen && !cinematicActive) {
         const beforeMove = { x: worldSession.player.x, z: worldSession.player.z };
@@ -2284,17 +2719,15 @@ function bootApp() {
         });
         if (shouldCancelRuneDrawing(worldSession.player, wasDrawingRune)) {
           runePointerId = null;
-          endRuneStroke(runeTrace);
-          inputController.exitRuneMode();
-          resetRuneSelection(runeCanvas);
-          renderInputState();
-          showManaEmptyNotice();
-          updateStatus("마나가 모두 소모되어 룬 그리기가 취소됐습니다.");
+          cancelHandRuneCast(runeCanvas, { insufficientMana: true });
         }
         updateWorldSession(
           worldSession,
           dungeon,
-          sceneInput,
+          {
+            ...sceneInput,
+            cameraTurn: (sceneInput.cameraTurn ?? 0) * (elapsedMs / 1000) * 1.65,
+          },
           elapsedMs,
           {
             canLeaveCurrentRoom: (room) => (room.type !== "combat" && room.type !== "boss")
@@ -2349,6 +2782,13 @@ function bootApp() {
       if (combatState.lastEvent?.type === "player-hit") {
         const hitMonster = (monstersByRoom[worldSession.currentRoomId] ?? [])
           .find((monster) => monster.id === combatState.lastEvent.monsterId);
+        if (
+          hitMonster?.isBoss
+          && combatState.lastEvent.damage >= 100
+          && !combatState.lastEvent.defeated
+        ) {
+          enqueueBossDialogue("heavyHit", { cooldownMs: 7000 });
+        }
         if (hitMonster) {
           playSpatialCue("hit", {
             distance: Math.hypot(hitMonster.position.x - worldSession.player.x, hitMonster.position.z - worldSession.player.z),
@@ -2440,19 +2880,27 @@ function bootApp() {
         }
       }
 
-      copyPlayerToProgress(worldSession.player, playerProgress);
       if (worldSession.npcNearby) beginNpcDialogueSequence();
-      updatePlayerHud();
-      updateMiniMapEntities();
-      drawRoomScene(worldCanvas, {
-        dungeon,
-        session: worldSession,
-        monstersByRoom,
-        combatState,
-        assets: GAME_ASSETS,
-      });
-      if (inputController.state.mode !== GestureMode.EXPLORING || runeTrace.sparks.length > 0) {
-        drawRuneTrace(runeCanvas, runeTrace);
+      if (hudUpdateAccumulatorMs >= HUD_UPDATE_INTERVAL_MS) {
+        hudUpdateAccumulatorMs = 0;
+        updatePlayerHud();
+      }
+      if (miniMapUpdateAccumulatorMs >= MINI_MAP_UPDATE_INTERVAL_MS) {
+        miniMapUpdateAccumulatorMs = 0;
+        updateMiniMapEntities();
+      }
+      if (!menuOpen && worldRenderAccumulatorMs >= WORLD_RENDER_INTERVAL_MS) {
+        worldRenderAccumulatorMs %= WORLD_RENDER_INTERVAL_MS;
+        drawRoomScene(worldCanvas, {
+          dungeon,
+          session: worldSession,
+          monstersByRoom,
+          combatState,
+          assets: GAME_ASSETS,
+        });
+        if (inputController.state.mode !== GestureMode.EXPLORING || runeTrace.sparks.length > 0) {
+          drawRuneTrace(runeCanvas, runeTrace);
+        }
       }
     }
     requestAnimationFrame(gameLoop);

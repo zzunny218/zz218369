@@ -1,53 +1,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GestureMode } from "./gesture-engine.js";
-import { ManualInputController, calculateKeyboardMovement } from "./manual-input.js";
+import { calculatePointerCameraTurn, createManualInputState } from "./manual-input.js";
 
-test("WASD는 대각선에서도 같은 크기의 이동 벡터를 만든다", () => {
-  const vector = calculateKeyboardMovement(["w", "d"]);
-
-  assert.ok(Math.abs(Math.hypot(vector.x, vector.y) - 1) < Number.EPSILON);
-  assert.ok(vector.x > 0);
-  assert.ok(vector.y < 0);
+test("WASD와 방향키는 룬 모드 밖에서 사용할 정규화된 이동 벡터를 만든다", () => {
+  const input = createManualInputState();
+  input.setKey("KeyW", true);
+  input.setKey("KeyD", true);
+  const sceneInput = input.getSceneInput();
+  assert.ok(Math.abs(sceneInput.moveVector.x - Math.SQRT1_2) < 0.000001);
+  assert.ok(Math.abs(sceneInput.moveVector.y + Math.SQRT1_2) < 0.000001);
 });
 
-test("1과 2는 각각 공격·방어 룬 준비 모드로 진입한다", () => {
-  const controller = new ManualInputController();
-  controller.pressKey("1");
-  assert.equal(controller.state.mode, GestureMode.RUNE_READY);
-  assert.equal(controller.state.castType, "attack");
-
-  controller.pressKey("2");
-  assert.equal(controller.state.castType, "defense");
+test("Q와 E는 카메라 회전 입력이며 초기화하면 모든 입력이 사라진다", () => {
+  const input = createManualInputState();
+  input.setKey("KeyQ", true);
+  assert.equal(input.getSceneInput().cameraTurn, -1);
+  input.reset();
+  assert.deepEqual(input.getSceneInput(), { moveVector: { x: 0, y: 0 }, cameraTurn: 0 });
 });
 
-test("룬 모드에서는 이동과 UI 선택을 잠근다", () => {
-  const controller = new ManualInputController();
-  controller.pressKey("w");
-  controller.pressKey("1");
-
-  assert.equal(controller.getSceneInput().isMoving, false);
-  assert.equal(controller.selectUi("menu"), false);
-});
-
-test("좌클릭 상태와 Esc가 룬 상태를 올바르게 전환한다", () => {
-  const controller = new ManualInputController();
-  controller.pressKey("1");
-  assert.equal(controller.startDrawing(), true);
-  assert.equal(controller.state.mode, GestureMode.DRAWING);
-  assert.equal(controller.stopDrawing(), true);
-  assert.equal(controller.state.mode, GestureMode.RUNE_READY);
-
-  controller.pressKey("Escape");
-  assert.equal(controller.state.mode, GestureMode.EXPLORING);
-  assert.equal(controller.state.castType, null);
-});
-
-test("왼손·오른손 반전은 룬·카메라 버튼과 UI 버튼을 맞바꾼다", () => {
-  const controller = new ManualInputController();
-  assert.equal(controller.getRuneAndCameraButton(), 0);
-  assert.equal(controller.getUiButton(), 2);
-  assert.equal(controller.toggleMouseRoles(), true);
-  assert.equal(controller.getRuneAndCameraButton(), 2);
-  assert.equal(controller.getUiButton(), 0);
+test("좌클릭 드래그 카메라 회전량은 포인터 이동에 비례하고 큰 튐은 제한한다", () => {
+  assert.ok(Math.abs(calculatePointerCameraTurn(20) - 0.11) < 0.000001);
+  assert.ok(Math.abs(calculatePointerCameraTurn(-20) + 0.11) < 0.000001);
+  assert.ok(Math.abs(calculatePointerCameraTurn(1000) - 0.44) < 0.000001);
+  assert.equal(calculatePointerCameraTurn(Number.NaN), 0);
 });

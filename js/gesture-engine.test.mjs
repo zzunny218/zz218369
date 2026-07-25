@@ -3,31 +3,29 @@ import test from "node:test";
 import { GestureMode, createGestureState, transitionGestureState } from "./gesture-engine.js";
 
 const idleInput = {
-  leftHandClosed: false,
+  modeHandClosed: false,
   leftPalmInMoveZoneHeldMs: 0,
-  rightFistHeldMs: 0,
-  rightPalmOpenHeldMs: 0,
-  rightThumbMiddlePinched: false,
+  drawingHandFistHeldMs: 0,
+  bothPalmsOpenHeldMs: 0,
   uiHoverHeldMs: 0,
   uiItemId: null,
 };
 
-test("오른손 편 손 0.2초 유지로 룬 모드에 진입한다", () => {
+test("양손 편 손 0.2초 유지로 공격 룬 모드에 진입한다", () => {
   const next = transitionGestureState(createGestureState(), {
     ...idleInput,
-    leftHandClosed: true,
-    rightPalmOpenHeldMs: 200,
+    bothPalmsOpenHeldMs: 200,
   });
 
   assert.equal(next.mode, GestureMode.RUNE_READY);
   assert.equal(next.castType, "attack");
 });
 
-test("엄지-중지 핀치가 유지될 때만 그리기 상태가 된다", () => {
-  const readyState = { ...createGestureState(), mode: GestureMode.RUNE_READY, castType: "defense" };
+test("왼손 주먹이 유지될 때만 그리기 상태가 된다", () => {
+  const readyState = { ...createGestureState(), mode: GestureMode.RUNE_READY, castType: "attack" };
   const drawingState = transitionGestureState(readyState, {
     ...idleInput,
-    rightThumbMiddlePinched: true,
+    modeHandClosed: true,
   });
   const releasedState = transitionGestureState(drawingState, idleInput);
 
@@ -35,9 +33,9 @@ test("엄지-중지 핀치가 유지될 때만 그리기 상태가 된다", () =
   assert.equal(releasedState.mode, GestureMode.RUNE_READY);
 });
 
-test("오른손 주먹 0.2초 유지로 어느 룬 상태에서든 탐험으로 돌아간다", () => {
+test("그리기 손 주먹 0.2초 유지로 어느 룬 상태에서든 탐험으로 돌아간다", () => {
   const state = { ...createGestureState(), mode: GestureMode.DRAWING, castType: "attack" };
-  const next = transitionGestureState(state, { ...idleInput, rightFistHeldMs: 200 });
+  const next = transitionGestureState(state, { ...idleInput, drawingHandFistHeldMs: 200 });
 
   assert.equal(next.mode, GestureMode.EXPLORING);
   assert.equal(next.castType, null);

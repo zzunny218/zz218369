@@ -4,6 +4,7 @@ const LANDMARK = Object.freeze({
   INDEX_TIP: 8,
   MIDDLE_MCP: 9,
   MIDDLE_PIP: 10,
+  MIDDLE_DIP: 11,
   MIDDLE_TIP: 12,
   RING_PIP: 14,
   RING_TIP: 16,
@@ -12,8 +13,15 @@ const LANDMARK = Object.freeze({
   THUMB_TIP: 4,
 });
 
+export const PINCH_START_RATIO = 0.85;
+export const PINCH_RELEASE_RATIO = 1.08;
+
 function distance(first, second) {
   return Math.hypot(first.x - second.x, first.y - second.y, (first.z ?? 0) - (second.z ?? 0));
+}
+
+function screenDistance(first, second) {
+  return Math.hypot(first.x - second.x, first.y - second.y);
 }
 
 /** 손가락 끝이 중간 관절보다 손목에서 충분히 멀면 편 손가락으로 본다. */
@@ -21,29 +29,55 @@ function isFingerExtended(landmarks, tipIndex, pipIndex) {
   const wrist = landmarks[LANDMARK.WRIST];
   const tipDistance = distance(landmarks[tipIndex], wrist);
   const pipDistance = distance(landmarks[pipIndex], wrist);
-  return tipDistance > pipDistance * 1.1;
+  return tipDistance > pipDistance * 1.12;
+}
+
+/** 원근으로 z값이 흔들려도 핀치가 끊기지 않도록 화면상 엄지·중지 거리를 손바닥 크기로 정규화한다. */
+export function getThumbMiddlePinchRatio(landmarks) {
+  if (!landmarks || landmarks.length < 21) return Number.POSITIVE_INFINITY;
+  const palmSize = screenDistance(landmarks[LANDMARK.WRIST], landmarks[LANDMARK.MIDDLE_MCP]);
+  if (palmSize <= 0) return Number.POSITIVE_INFINITY;
+  const thumbToMiddle = Math.min(
+    screenDistance(landmarks[LANDMARK.THUMB_TIP], landmarks[LANDMARK.MIDDLE_TIP]),
+    screenDistance(landmarks[LANDMARK.THUMB_TIP], landmarks[LANDMARK.MIDDLE_DIP]),
+  );
+  return thumbToMiddle / palmSize;
+}
+
+/** 시작은 관대하게, 해제는 더 멀어졌을 때 처리해 프레임 사이 핀치 깜빡임을 막는다. */
+export function resolveThumbMiddlePinch(pinchRatio, wasPinched = false) {
+  if (!Number.isFinite(pinchRatio)) return false;
+  return pinchRatio <= (wasPinched ? PINCH_RELEASE_RATIO : PINCH_START_RATIO);
 }
 
 /** 하나의 손 랜드마크에서 룬 모드에 필요한 제스처를 추출한다. */
 export function classifyHandGesture(landmarks) {
   if (!landmarks || landmarks.length < 21) {
-    return { isPalmOpen: false, isFist: false, isThumbMiddlePinched: false };
+    return {
+      isPalmOpen: false,
+      isFist: false,
+      isIndexExtended: false,
+      isThumbMiddlePinched: false,
+      thumbMiddlePinchRatio: Number.POSITIVE_INFINITY,
+    };
   }
 
-  const extendedFingerCount = [
+  const extendedFingers = [
     [LANDMARK.INDEX_TIP, LANDMARK.INDEX_PIP],
     [LANDMARK.MIDDLE_TIP, LANDMARK.MIDDLE_PIP],
     [LANDMARK.RING_TIP, LANDMARK.RING_PIP],
     [LANDMARK.PINKY_TIP, LANDMARK.PINKY_PIP],
-  ].filter(([tip, pip]) => isFingerExtended(landmarks, tip, pip)).length;
+  ].map(([tip, pip]) => isFingerExtended(landmarks, tip, pip));
+  const extendedFingerCount = extendedFingers.filter(Boolean).length;
 
-  const palmSize = distance(landmarks[LANDMARK.WRIST], landmarks[LANDMARK.MIDDLE_MCP]);
-  const thumbMiddleDistance = distance(landmarks[LANDMARK.THUMB_TIP], landmarks[LANDMARK.MIDDLE_TIP]);
+  const thumbMiddlePinchRatio = getThumbMiddlePinchRatio(landmarks);
 
   return {
     isPalmOpen: extendedFingerCount === 4,
-    isFist: extendedFingerCount === 0,
-    isThumbMiddlePinched: palmSize > 0 && thumbMiddleDistance / palmSize <= 0.55,
+    isFist: extendedFingerCount === 0 || (extendedFingerCount === 1 && !extendedFingers[0]),
+    isIndexExtended: extendedFingers[0],
+    isThumbMiddlePinched: resolveThumbMiddlePinch(thumbMiddlePinchRatio),
+    thumbMiddlePinchRatio,
   };
 }
 

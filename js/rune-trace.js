@@ -1,4 +1,4 @@
-/** 새 룬 궤적 상태를 만든다. 한 번의 좌클릭 드래그가 한 획이다. */
+/** 새 룬 궤적 상태를 만든다. 한 번의 룬 그리기 주먹 유지가 한 획이다. */
 export function createRuneTrace() {
   return { strokes: [], sparks: [], activeStrokeIndex: null };
 }
@@ -36,12 +36,12 @@ export function beginRuneStroke(trace, point) {
   addWeldingSparks(trace, point, 7);
 }
 
-export function appendRunePoint(trace, point) {
+export function appendRunePoint(trace, point, { sparkCount = 4 } = {}) {
   if (trace.activeStrokeIndex === null) {
     return false;
   }
   trace.strokes[trace.activeStrokeIndex].push(point);
-  addWeldingSparks(trace, point);
+  if (sparkCount > 0) addWeldingSparks(trace, point, sparkCount);
   return true;
 }
 
@@ -59,10 +59,20 @@ export function countRunePoints(trace) {
   return trace.strokes.reduce((total, stroke) => total + stroke.length, 0);
 }
 
+/** 손 추적 좌표와 마우스 이벤트 좌표를 모두 같은 화면 영역 판정에 사용한다. */
+export function isScreenPointInsideRectangle(point, rectangle) {
+  const x = Number(point?.clientX ?? point?.x);
+  const y = Number(point?.clientY ?? point?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !rectangle) return false;
+  return x >= rectangle.left && x <= rectangle.right
+    && y >= rectangle.top && y <= rectangle.bottom;
+}
+
 /** 발광 주황색 룬 선과 펜 끝에서 튀는 용접 불꽃을 함께 그린다. */
 export function drawRuneTrace(canvas, trace) {
   const rectangle = canvas.getBoundingClientRect();
-  const pixelRatio = window.devicePixelRatio || 1;
+  // 고해상도 화면에서 픽셀 수가 폭증하지 않도록 충분히 선명한 1.5배까지만 렌더링한다.
+  const pixelRatio = Math.min(1.5, window.devicePixelRatio || 1);
   const width = Math.max(1, Math.floor(rectangle.width * pixelRatio));
   const height = Math.max(1, Math.floor(rectangle.height * pixelRatio));
   if (canvas.width !== width || canvas.height !== height) {

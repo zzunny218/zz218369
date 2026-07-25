@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_ATTACK_POWER,
   addUltimateFromDamage,
+  calculatePlayerAttackDamage,
   createPlayerProgress,
+  hasEnoughManaToCast,
+  hasManaRemaining,
+  MINIMUM_MAGIC_MANA,
   resetPlayerAfterDeath,
   shouldCancelRuneDrawing,
   startPlayerCastCooldown,
@@ -15,6 +20,15 @@ test("플레이어는 마나 100, 궁극기 0, G 0으로 시작한다", () => {
   assert.equal(player.mana, 100);
   assert.equal(player.ultimate, 0);
   assert.equal(player.gold, 0);
+  assert.equal(player.attackPower, DEFAULT_ATTACK_POWER);
+});
+
+test("개발자 공격력 10000은 기본 피해를 100배로 만들고 기존 공격 배율도 유지한다", () => {
+  const player = createPlayerProgress();
+  player.attackPower = 10000;
+  assert.equal(calculatePlayerAttackDamage(100, player), 10000);
+  player.attackMultiplier = 1.2;
+  assert.equal(calculatePlayerAttackDamage(50, player), 6000);
 });
 
 test("마법 사용 후 1.5초 동안 다시 사용할 수 없다", () => {
@@ -49,11 +63,18 @@ test("마나는 0.1초마다 0.6 회복되고 룬을 그릴 때는 초당 15 소
   assert.ok(Math.abs(player.mana - 47.3) < 0.000001);
 });
 
-test("룬을 그리는 중 마나가 0이 되면 즉시 취소 조건이 성립한다", () => {
+test("마나 30 이하는 신규 시전만 막고 진행 중인 룬은 마나 0에서 취소한다", () => {
   const player = createPlayerProgress();
+  player.mana = MINIMUM_MAGIC_MANA;
+  assert.equal(shouldCancelRuneDrawing(player, true), false);
+  assert.equal(shouldCancelRuneDrawing(player, false), false);
+  assert.equal(hasEnoughManaToCast(player), false);
+  assert.equal(hasManaRemaining(player), true);
+  player.mana = MINIMUM_MAGIC_MANA + 0.1;
+  assert.equal(hasEnoughManaToCast(player), true);
   player.mana = 0;
   assert.equal(shouldCancelRuneDrawing(player, true), true);
-  assert.equal(shouldCancelRuneDrawing(player, false), false);
+  assert.equal(hasManaRemaining(player), false);
 });
 
 test("궁극기 게이지는 실제 피해의 30분의 1만큼 증가하고 최대치를 넘지 않는다", () => {

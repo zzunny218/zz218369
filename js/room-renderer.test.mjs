@@ -36,7 +36,7 @@ test("3인칭 카메라는 플레이어가 벽에 붙어도 방 밖으로 넘어
   assert.ok(camera.z < ROOM_HALF_SIZE);
 });
 
-test("룬 그리기 줌 진행도에 따라 카메라가 발사 방향으로 부드럽게 가까워진다", () => {
+test("룬 모드 진행도에 따라 카메라가 플레이어 눈높이의 1인칭 시점으로 이동한다", () => {
   const dungeon = generateDungeon({ random: createSeededRandom(24) });
   const session = createWorldSession(dungeon);
   session.player.x = 0;
@@ -48,6 +48,38 @@ test("룬 그리기 줌 진행도에 따라 카메라가 발사 방향으로 부
   const zoomed = getThirdPersonCamera(session);
   assert.ok(Math.hypot(zoomed.x, zoomed.z) < Math.hypot(normal.x, normal.z));
   assert.ok(zoomed.y < normal.y);
+  assert.ok(Math.hypot(zoomed.x - session.player.x, zoomed.z - session.player.z) < 0.1);
+  assert.ok(Math.abs(zoomed.y - 2 * 0.74) < 0.001);
+  assert.equal(zoomed.screenCenterYRatio, 0.5);
+  assert.equal(zoomed.firstPersonBlend, 1);
+});
+
+test("룬 자동 조준 카메라는 선택한 적의 몸체 중앙을 화면 조준선 높이에 맞춘다", () => {
+  const dungeon = generateDungeon({ random: createSeededRandom(26) });
+  const session = createWorldSession(dungeon);
+  session.player.x = 0;
+  session.player.z = 0;
+  session.player.cameraYaw = 0;
+  session.player.runeZoomProgress = 1;
+  session.runeTargetId = "target";
+  session.runeTargetFocus = { id: "target", x: 0, y: 0.8, z: -4 };
+  const camera = getThirdPersonCamera(session);
+  const distance = Math.hypot(
+    session.runeTargetFocus.x - camera.x,
+    session.runeTargetFocus.z - camera.z,
+  );
+  const expectedPitch = Math.atan2(camera.y - session.runeTargetFocus.y, distance);
+  assert.ok(Math.abs(camera.pitch - expectedPitch) < 0.000001);
+  assert.equal(camera.screenCenterYRatio, 0.5);
+});
+
+test("같은 프레임의 카메라는 재사용하고 플레이어가 움직이면 다시 계산한다", () => {
+  const dungeon = generateDungeon({ random: createSeededRandom(25) });
+  const session = createWorldSession(dungeon);
+  const first = getThirdPersonCamera(session);
+  assert.equal(getThirdPersonCamera(session), first);
+  session.player.x += 0.1;
+  assert.notEqual(getThirdPersonCamera(session), first);
 });
 
 test("카메라 회전은 플레이어의 실제 월드 위치를 변경하지 않는다", () => {

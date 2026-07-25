@@ -33,6 +33,7 @@ export const MELEE_ATTACK_RANGE_MULTIPLIER = 1.35;
 export const MELEE_MOVE_SPEED_MULTIPLIER = 1.5;
 export const PARTICLE_LIFETIME_MULTIPLIER = 1.8;
 export const PARTICLE_SIZE_MULTIPLIER = 1.6;
+export const MAX_ACTIVE_PARTICLES = 1800;
 export const BOSS_SUMMON_WARNING_MS = 1200;
 export const BOSS_PHASE_TWO_HEALTH = 1500;
 export const ULTIMATE_FIELD_DURATION_MS = 10000;
@@ -45,10 +46,11 @@ export function isBossPhaseTwo(monster) {
 }
 
 export function getEnemyTimeScaleForInputMode(mode, { isBoss = false, isUltimate = false } = {}) {
-  if (isUltimate && mode !== "exploring") return 0;
-  if (mode === "drawing") return isBoss ? 0.25 : 0;
   if (mode === "exploring") return 1;
-  return 0.5;
+  // 룬 준비에 들어간 순간부터 실제 그리기와 시전까지 전투 시간을 완전히 멈춘다.
+  if (mode === "rune-ready" || mode === "drawing") return 0;
+  if (isUltimate && mode !== "exploring") return 0;
+  return 0;
 }
 
 export const MonsterState = Object.freeze({
@@ -1562,6 +1564,7 @@ export function updateMonsterBehavior(monster, { session, room, monsters = [], c
 
 function updateParticles(state, elapsedMs) {
   const seconds = elapsedMs / 1000;
+  let writeIndex = 0;
   for (const particle of state.particles) {
     particle.lifeMs -= elapsedMs;
     particle.x += particle.velocityX * seconds;
@@ -1569,12 +1572,19 @@ function updateParticles(state, elapsedMs) {
     particle.z += particle.velocityZ * seconds;
     particle.velocityY -= 0.24 * (particle.gravityScale ?? 1) * seconds;
     particle.rotation += particle.rotationSpeed * seconds;
+    if (particle.lifeMs > 0) {
+      state.particles[writeIndex] = particle;
+      writeIndex += 1;
+    }
   }
-  state.particles = state.particles.filter((particle) => particle.lifeMs > 0);
+  state.particles.length = writeIndex;
+  if (state.particles.length > MAX_ACTIVE_PARTICLES) {
+    state.particles.splice(0, state.particles.length - MAX_ACTIVE_PARTICLES);
+  }
 }
 
 function createGoldDrop(state, session, monster, random) {
-  const amount = Math.floor(Math.min(0.999999, Math.max(0, random())) * 11);
+  const amount = Math.floor(Math.min(0.999999, Math.max(0, random())) * 11) * 2;
   monster.goldRewardDropped = true;
   if (amount > 0) {
     state.goldDrops.push({

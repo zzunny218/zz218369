@@ -14,7 +14,7 @@ test("각 속성은 이름이 정해진 A·B·C 3개 스킬을 가진다", () =>
   assert.equal(catalog["grass-3"].name, "가시덩쿨");
   assert.equal(catalog["rock-3"].name, "대지진");
   assert.equal(catalog["electric-3"].name, "라이트닝 썬더");
-  assert.equal(catalog["ice-3"].name, "스노우 그레이브");
+  assert.equal(catalog["ice-3"].name, "블리자드");
   assert.equal(catalog["light-3"].name, "스타 슬레이브");
   assert.equal(catalog["dark-3"].name, "시공간 붕괴");
   assert.equal(getSkillName("light", 2), "십자 광선");

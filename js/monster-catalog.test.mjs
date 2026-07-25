@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeededRandom } from "./dungeon-generator.js";
 import {
+  BOSS_STAT_MULTIPLIER,
   MONSTER_ATTACK_POWER_MULTIPLIER,
   MONSTER_MOVE_SPEED_MULTIPLIER,
+  SPIRIT_KING_HEALTH,
   calculateMonsterAttackDamage,
   createMonsterInstance,
   createSpiritKingBoss,
@@ -18,7 +20,8 @@ test("모든 몬스터의 기본 공격력은 기존 수치보다 30% 낮다", (
   const boss = createSpiritKingBoss();
   assert.equal(MONSTER_ATTACK_POWER_MULTIPLIER, 0.7);
   assert.equal(monster.stats.attack, Math.round(template.stats.attack * 0.7 * 10) / 10);
-  assert.equal(boss.stats.attack, 25.2);
+  assert.equal(BOSS_STAT_MULTIPLIER, 0.75);
+  assert.equal(boss.stats.attack, 18.9);
 });
 
 test("모든 몬스터와 보스의 이동속도는 기존의 3분의 2로 낮아진다", () => {
@@ -46,11 +49,12 @@ test("전투 노드 단계마다 일반 적 체력과 공격력이 1.2배 누적
   assert.equal(monster.currentHealth, monster.maximumHealth);
 });
 
-test("타락한 정령왕 보스는 체력 4000의 거대한 전용 몬스터다", () => {
+test("타락한 정령왕 보스는 현재 수치의 75%인 체력 3000의 거대한 전용 몬스터다", () => {
   const boss = createSpiritKingBoss();
   assert.equal(boss.name, "타락한 정령왕");
-  assert.equal(boss.maximumHealth, 4000);
-  assert.equal(boss.currentHealth, 4000);
+  assert.equal(SPIRIT_KING_HEALTH, 3000);
+  assert.equal(boss.maximumHealth, 3000);
+  assert.equal(boss.currentHealth, 3000);
   assert.equal(boss.isBoss, true);
   assert.ok(boss.stats.size >= 3);
 });

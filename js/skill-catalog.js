@@ -23,9 +23,9 @@ export const SKILL_NAMES = Object.freeze({
   grass: Object.freeze(["나뭇잎 쏘기", "잎날 가르기", "가시덩쿨"]),
   rock: Object.freeze(["진동", "대지 균열", "대지진"]),
   electric: Object.freeze(["일렉트릭 샷", "크로스 볼트", "라이트닝 썬더"]),
-  ice: Object.freeze(["아이스볼", "프리즈 스톰", "스노우 그레이브"]),
+  ice: Object.freeze(["아이스볼", "프리즈 스톰", "블리자드"]),
   light: Object.freeze(["섬광", "십자 광선", "스타 슬레이브"]),
-  dark: Object.freeze(["그림자", "휘몰아치는 어둠", "시공간 붕괴"]),
+  dark: Object.freeze(["그림자", "폴터가이스트", "시공간 붕괴"]),
 });
 
 export const ULTIMATE_SKILL_NAME = "신의 가호";

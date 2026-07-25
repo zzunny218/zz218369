@@ -6,6 +6,7 @@ import {
   BOSS_MELEE_PREPARE_MS,
   BOSS_MELEE_RANGE,
   ELEMENT_PRESENTATION,
+  MAX_ACTIVE_PARTICLES,
   MELEE_MOVE_SPEED_MULTIPLIER,
   MonsterState,
   MONSTER_AWARENESS_RADIUS,
@@ -294,6 +295,29 @@ test("마법 파티클과 마법진은 이전보다 크고 오래 유지된다",
   assert.equal(state.castEffects[0].maximumLifeMs, 1800);
 });
 
+test("파티클이 폭증해도 활성 개수는 렌더링 한도 안으로 정리된다", () => {
+  const state = createCombatState();
+  state.particles = Array.from({ length: MAX_ACTIVE_PARTICLES + 250 }, (_, index) => ({
+    x: index * 0.001,
+    y: 0,
+    z: 0,
+    velocityX: 0,
+    velocityY: 0,
+    velocityZ: 0,
+    rotation: 0,
+    rotationSpeed: 0,
+    lifeMs: 1000,
+    maximumLifeMs: 1000,
+  }));
+  updateCombatState(state, {
+    monsters: [],
+    session: createSession(),
+    room: { rocks: [] },
+    elapsedMs: 16,
+  });
+  assert.equal(state.particles.length, MAX_ACTIVE_PARTICLES);
+});
+
 test("근거리 적은 걷기 상태로 플레이어를 향해 느리게 이동한다", () => {
   const state = createCombatState();
   const session = createSession();
@@ -425,12 +449,13 @@ test("룬 모드의 적 이동·공격 준비·적 투사체는 모두 0.5배속
   assert.ok(Math.abs(state.projectiles[0].z - startZ) < state.projectiles[0].speed * 0.1);
 });
 
-test("일반 룬 중 일반 적은 멈추고 보스는 0.25배속이며 궁극기 입력 중에는 모두 멈춘다", () => {
+test("룬 준비에 들어간 순간부터 일반 적과 보스를 모두 멈춘다", () => {
   assert.equal(getEnemyTimeScaleForInputMode("drawing"), 0);
-  assert.equal(getEnemyTimeScaleForInputMode("drawing", { isBoss: true }), 0.25);
+  assert.equal(getEnemyTimeScaleForInputMode("drawing", { isBoss: true }), 0);
   assert.equal(getEnemyTimeScaleForInputMode("drawing", { isBoss: true, isUltimate: true }), 0);
   assert.equal(getEnemyTimeScaleForInputMode("rune-ready", { isBoss: true, isUltimate: true }), 0);
-  assert.equal(getEnemyTimeScaleForInputMode("rune-ready"), 0.5);
+  assert.equal(getEnemyTimeScaleForInputMode("rune-ready"), 0);
+  assert.equal(getEnemyTimeScaleForInputMode("rune-ready", { isBoss: true }), 0);
   assert.equal(getEnemyTimeScaleForInputMode("exploring"), 1);
 });
 
@@ -487,7 +512,7 @@ test("체력 1500 이하 정령왕은 자기 중심 지름 10 어둠 범위 공�
   assert.ok(drainCombatSoundEvents(state).some((event) => event.type === "boss-dark-release"));
 });
 
-test("적에게 실제로 입힌 피해의 30분의 1만큼 궁극기가 차고 처치 시 0~10G가 드롭된다", () => {
+test("적에게 실제로 입힌 피해의 30분의 1만큼 궁극기가 차고 처치 시 기존의 2배인 0~20G가 드롭된다", () => {
   const state = createCombatState();
   const session = createSession();
   const monster = createMonster({
@@ -501,10 +526,10 @@ test("적에게 실제로 입힌 피해의 30분의 1만큼 궁극기가 차고 
   }
   assert.equal(monster.currentHealth, 0);
   assert.ok(Math.abs(session.player.ultimate - 5 / 3) < 0.000001);
-  assert.equal(state.goldDrops[0].amount, 10);
+  assert.equal(state.goldDrops[0].amount, 20);
   session.player.z = -2;
   updateCombatState(state, { monsters: [monster], session, room: { rocks: [] }, elapsedMs: 16, random: () => 0.99 });
-  assert.equal(session.player.gold, 10);
+  assert.equal(session.player.gold, 20);
   assert.equal(state.goldDrops.length, 0);
 });
 

@@ -204,7 +204,7 @@ function findStageEndRoom(rooms, startRoom) {
  * 시작방에서 가지가 뻗는 아이작식 격자 던전을 만든다.
  * 시작방은 최초 연결 외의 인접 좌표를 금지해 출구가 정확히 하나가 되도록 한다.
  */
-export function generateDungeon({ random = Math.random, minimumRooms = 8, maximumRooms = 10 } = {}) {
+export function generateDungeon({ random = Math.random, minimumRooms = 4, maximumRooms = 5 } = {}) {
   if (minimumRooms < 2 || maximumRooms < minimumRooms) {
     throw new Error("방 개수 범위가 올바르지 않습니다.");
   }

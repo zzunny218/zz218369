@@ -17,13 +17,13 @@ test("일반 단계 노드는 전투 40%, 선택지 35%, 상점 25% 확률을 �
   assert.equal(EVENT_NODE_CHANCE, 0.35);
   assert.equal(SHOP_NODE_CHANCE, 0.25);
   const eventGraph = generateExplorationGraph({ random: () => 0.6, minimumRegularWidth: 1, maximumRegularWidth: 1 });
-  assert.ok(eventGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 6)
+  assert.ok(eventGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 5)
     .every((node) => node.type === ExplorationNodeType.EVENT));
   const combatGraph = generateExplorationGraph({ random: () => 0, minimumRegularWidth: 1, maximumRegularWidth: 1 });
-  assert.ok(combatGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 6)
+  assert.ok(combatGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 5)
     .every((node) => node.type === ExplorationNodeType.COMBAT));
   const shopGraph = generateExplorationGraph({ random: () => 0.9, minimumRegularWidth: 1, maximumRegularWidth: 1 });
-  assert.ok(shopGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 6)
+  assert.ok(shopGraph.nodes.filter((node) => node.stage >= 2 && node.stage <= 5)
     .every((node) => node.type === ExplorationNodeType.SHOP));
 });
 
@@ -41,17 +41,17 @@ test("탐험 노드는 다음 층으로만 연결되고 마지막 보스 하나�
   }
 });
 
-test("탐험 지도는 7단계이며 2~6단계에는 항상 노드가 3개씩 등장한다", () => {
+test("탐험 지도는 6단계이며 2~5단계에는 항상 노드가 3개씩 등장한다", () => {
   const graph = generateExplorationGraph({ random: createSeededRandom(18) });
-  assert.equal(graph.layers.length, 7);
+  assert.equal(graph.layers.length, 6);
   assert.equal(graph.layers[0].length, 1);
   assert.equal(graph.nodeById[graph.layers[0][0]].type, ExplorationNodeType.COMBAT);
   assert.equal(graph.nodeById[graph.layers[0][0]].isInitialMap, true);
   assert.equal(REGULAR_NODE_WIDTH, 3);
-  assert.ok(graph.layers.slice(1, 6).every((layer) => layer.length === 3));
-  assert.deepEqual(graph.layers[6], [graph.bossNodeId]);
-  const sixthStageIds = new Set(graph.layers[5]);
-  assert.ok([...sixthStageIds].every((nodeId) => graph.edges.some((edge) => (
+  assert.ok(graph.layers.slice(1, 5).every((layer) => layer.length === 3));
+  assert.deepEqual(graph.layers[5], [graph.bossNodeId]);
+  const fifthStageIds = new Set(graph.layers[4]);
+  assert.ok([...fifthStageIds].every((nodeId) => graph.edges.some((edge) => (
     edge.from === nodeId && edge.to === graph.bossNodeId
   ))));
 });

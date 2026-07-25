@@ -1,143 +1,71 @@
-import { GestureMode } from "./gesture-engine.js";
+const MOVEMENT_KEYS = Object.freeze({
+  KeyW: { x: 0, y: -1 },
+  ArrowUp: { x: 0, y: -1 },
+  KeyS: { x: 0, y: 1 },
+  ArrowDown: { x: 0, y: 1 },
+  KeyA: { x: -1, y: 0 },
+  ArrowLeft: { x: -1, y: 0 },
+  KeyD: { x: 1, y: 0 },
+  ArrowRight: { x: 1, y: 0 },
+});
 
-const MOVEMENT_KEYS = new Set(["w", "a", "s", "d"]);
+const CAMERA_KEYS = Object.freeze({
+  KeyQ: -1,
+  KeyE: 1,
+});
 
-/** 눌린 WASD 키를 대각선에서도 같은 속도의 이동 벡터로 바꾼다. */
-export function calculateKeyboardMovement(pressedKeys) {
-  const keys = new Set([...pressedKeys].map((key) => key.toLowerCase()));
-  const x = Number(keys.has("d")) - Number(keys.has("a"));
-  const y = Number(keys.has("s")) - Number(keys.has("w"));
-  const length = Math.hypot(x, y);
+export const POINTER_CAMERA_SENSITIVITY = 0.0055;
 
-  if (length === 0) {
-    return { x: 0, y: 0 };
-  }
+export const MANUAL_GAMEPLAY_KEYS = Object.freeze([
+  ...Object.keys(MOVEMENT_KEYS),
+  ...Object.keys(CAMERA_KEYS),
+]);
 
-  return { x: x / length, y: y / length };
+function clampVector(vector) {
+  const length = Math.hypot(vector.x, vector.y);
+  if (length <= 1) return vector;
+  return { x: vector.x / length, y: vector.y / length };
 }
 
-/** 카메라 없이 사용하는 키보드·마우스 입력 상태를 관리한다. */
-export class ManualInputController {
-  constructor() {
-    this.pressedMovementKeys = new Set();
-    this.state = {
-      mode: GestureMode.EXPLORING,
-      castType: null,
-      selectedUiItemId: null,
-      mouseRolesReversed: false,
-    };
-  }
+/** 포인터가 한 프레임에 크게 튀어도 카메라가 순간이동하지 않도록 회전량을 제한한다. */
+export function calculatePointerCameraTurn(
+  deltaX,
+  sensitivity = POINTER_CAMERA_SENSITIVITY,
+) {
+  if (!Number.isFinite(deltaX) || !Number.isFinite(sensitivity)) return 0;
+  const boundedDelta = Math.max(-80, Math.min(80, deltaX));
+  return boundedDelta * sensitivity;
+}
 
-  /** 키 입력을 반영하고 화면에서 처리할 동작 이름을 반환한다. */
-  pressKey(key) {
-    const normalizedKey = key.toLowerCase();
+/** 룬 모드 밖에서 사용할 키보드 대체 이동·카메라 입력을 관리한다. */
+export function createManualInputState() {
+  const pressed = new Set();
 
-    if (MOVEMENT_KEYS.has(normalizedKey)) {
-      this.pressedMovementKeys.add(normalizedKey);
-      return "movement";
-    }
-
-    if (normalizedKey === "1") {
-      this.#enterRuneMode("attack");
-      return "attack-rune";
-    }
-
-    if (normalizedKey === "2") {
-      this.#enterRuneMode("defense");
-      return "defense-rune";
-    }
-
-    if (normalizedKey === "escape" && this.state.mode !== GestureMode.EXPLORING) {
-      this.exitRuneMode();
-      return "cancel-rune";
-    }
-
-    if (normalizedKey === "enter" && this.state.mode !== GestureMode.EXPLORING) {
-      this.exitRuneMode();
-      return "finish-rune";
-    }
-
-    return null;
-  }
-
-  releaseKey(key) {
-    this.pressedMovementKeys.delete(key.toLowerCase());
-  }
-
-  /** 룬 모드에서 좌클릭을 누른 동안만 그리기 상태가 된다. */
-  startDrawing() {
-    if (this.state.mode !== GestureMode.RUNE_READY) {
-      return false;
-    }
-
-    this.state = { ...this.state, mode: GestureMode.DRAWING };
-    return true;
-  }
-
-  stopDrawing() {
-    if (this.state.mode !== GestureMode.DRAWING) {
-      return false;
-    }
-
-    this.state = { ...this.state, mode: GestureMode.RUNE_READY };
-    return true;
-  }
-
-  /** 룬 모드가 아닐 때만 우클릭 UI 선택을 허용한다. */
-  selectUi(uiItemId) {
-    if (this.state.mode !== GestureMode.EXPLORING) {
-      return false;
-    }
-
-    this.state = { ...this.state, selectedUiItemId: uiItemId };
-    return true;
-  }
-
-  exitRuneMode() {
-    this.state = {
-      ...this.state,
-      mode: GestureMode.EXPLORING,
-      castType: null,
-    };
-  }
-
-  /** 기본 좌클릭/우클릭 역할을 서로 바꾸고 현재 상태를 반환한다. */
-  toggleMouseRoles() {
-    this.state = {
-      ...this.state,
-      mouseRolesReversed: !this.state.mouseRolesReversed,
-    };
-    return this.state.mouseRolesReversed;
-  }
-
-  getRuneAndCameraButton() {
-    return this.state.mouseRolesReversed ? 2 : 0;
-  }
-
-  getUiButton() {
-    return this.state.mouseRolesReversed ? 0 : 2;
-  }
-
-  /** 장면 루프가 바로 사용할 수 있는 이동 입력을 만든다. */
-  getSceneInput() {
-    const moveVector = this.state.mode === GestureMode.EXPLORING
-      ? calculateKeyboardMovement(this.pressedMovementKeys)
-      : { x: 0, y: 0 };
-
-    return {
-      isMoving: moveVector.x !== 0 || moveVector.y !== 0,
-      moveVector,
-      cameraTurn: 0,
-    };
-  }
-
-  #enterRuneMode(castType) {
-    this.pressedMovementKeys.clear();
-    this.state = {
-      ...this.state,
-      mode: GestureMode.RUNE_READY,
-      castType,
-      selectedUiItemId: null,
-    };
-  }
+  return {
+    setKey(code, active) {
+      if (!MANUAL_GAMEPLAY_KEYS.includes(code)) return false;
+      if (active) pressed.add(code);
+      else pressed.delete(code);
+      return true;
+    },
+    reset() {
+      pressed.clear();
+    },
+    getSceneInput() {
+      const movement = { x: 0, y: 0 };
+      let cameraTurn = 0;
+      for (const code of pressed) {
+        const move = MOVEMENT_KEYS[code];
+        if (move) {
+          movement.x += move.x;
+          movement.y += move.y;
+        }
+        cameraTurn += CAMERA_KEYS[code] ?? 0;
+      }
+      return {
+        moveVector: clampVector(movement),
+        cameraTurn: Math.max(-1, Math.min(1, cameraTurn)),
+      };
+    },
+  };
 }

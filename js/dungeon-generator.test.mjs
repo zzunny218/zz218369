@@ -8,11 +8,11 @@ import {
   isRoomRockLayoutWalkable,
 } from "./dungeon-generator.js";
 
-test("던전은 8~10개의 연결된 방을 만들고 시작방 출구는 하나다", () => {
+test("전투 던전은 4~5개의 연결된 방을 만들고 시작방 출구는 하나다", () => {
   assert.equal(ROOM_GRID_SIZE, 15);
   for (let seed = 1; seed <= 20; seed += 1) {
     const dungeon = generateDungeon({ random: createSeededRandom(seed) });
-    assert.ok(dungeon.rooms.length >= 8 && dungeon.rooms.length <= 10);
+    assert.ok(dungeon.rooms.length >= 4 && dungeon.rooms.length <= 5);
     assert.equal(Object.keys(dungeon.roomById[dungeon.startRoomId].doors).length, 1);
     assert.deepEqual(
       { x: dungeon.roomById[dungeon.startRoomId].campfire.x, z: dungeon.roomById[dungeon.startRoomId].campfire.z },

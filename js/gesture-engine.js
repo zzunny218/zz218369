@@ -30,14 +30,14 @@ export function transitionGestureState(state, input) {
     cameraTurn: 0,
     selectedUiItemId: null,
   };
-  const rightFistHeld = input.rightFistHeldMs >= HOLD_DURATION_MS;
+  const drawingHandFistHeld = input.drawingHandFistHeldMs >= HOLD_DURATION_MS;
 
   if (state.mode === GestureMode.DRAWING) {
-    if (rightFistHeld) {
+    if (drawingHandFistHeld) {
       return { ...nextState, mode: GestureMode.EXPLORING, castType: null };
     }
 
-    if (!input.rightThumbMiddlePinched) {
+    if (!input.modeHandClosed) {
       return { ...nextState, mode: GestureMode.RUNE_READY };
     }
 
@@ -45,22 +45,22 @@ export function transitionGestureState(state, input) {
   }
 
   if (state.mode === GestureMode.RUNE_READY) {
-    if (rightFistHeld) {
+    if (drawingHandFistHeld) {
       return { ...nextState, mode: GestureMode.EXPLORING, castType: null };
     }
 
-    if (input.rightThumbMiddlePinched) {
+    if (input.modeHandClosed) {
       return { ...nextState, mode: GestureMode.DRAWING };
     }
 
     return nextState;
   }
 
-  if (input.rightPalmOpenHeldMs >= HOLD_DURATION_MS) {
+  if (input.bothPalmsOpenHeldMs >= HOLD_DURATION_MS) {
     return {
       ...nextState,
       mode: GestureMode.RUNE_READY,
-      castType: input.leftHandClosed ? "attack" : "defense",
+      castType: "attack",
     };
   }
 

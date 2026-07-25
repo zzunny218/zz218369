@@ -1,9 +1,11 @@
 export const DEFAULT_MAXIMUM_HEALTH = 100;
 export const DEFAULT_MAXIMUM_MANA = 100;
 export const DEFAULT_MAXIMUM_ULTIMATE = 100;
+export const DEFAULT_ATTACK_POWER = 100;
 export const MANA_DRAW_DRAIN_PER_100_MS = 1.5;
 export const MANA_RECOVERY_PER_100_MS = 0.6;
 export const MAGIC_CAST_COOLDOWN_MS = 1500;
+export const MINIMUM_MAGIC_MANA = 30;
 
 function clamp(value, minimum, maximum) {
   return Math.min(Math.max(value, minimum), maximum);
@@ -21,6 +23,7 @@ export function createPlayerProgress({ nickname = "마법사" } = {}) {
     maximumUltimate: DEFAULT_MAXIMUM_ULTIMATE,
     gold: 0,
     castCooldownMs: 0,
+    attackPower: DEFAULT_ATTACK_POWER,
     attackMultiplier: 1,
     unlockedSecondSkills: [],
     unlockedThirdSkills: [],
@@ -39,6 +42,7 @@ export function copyProgressToPlayer(progress, player) {
   player.maximumUltimate = progress.maximumUltimate;
   player.gold = progress.gold;
   player.castCooldownMs = progress.castCooldownMs ?? 0;
+  player.attackPower = progress.attackPower ?? DEFAULT_ATTACK_POWER;
   player.attackMultiplier = progress.attackMultiplier ?? 1;
   player.unlockedSecondSkills = [...progress.unlockedSecondSkills];
   player.unlockedThirdSkills = [...(progress.unlockedThirdSkills ?? [])];
@@ -57,6 +61,7 @@ export function copyPlayerToProgress(player, progress) {
   progress.maximumUltimate = player.maximumUltimate;
   progress.gold = player.gold;
   progress.castCooldownMs = player.castCooldownMs ?? 0;
+  progress.attackPower = player.attackPower ?? DEFAULT_ATTACK_POWER;
   progress.attackMultiplier = player.attackMultiplier ?? 1;
   progress.unlockedSecondSkills = [...(player.unlockedSecondSkills ?? [])];
   progress.unlockedThirdSkills = [...(player.unlockedThirdSkills ?? [])];
@@ -82,6 +87,27 @@ export function updatePlayerMana(player, elapsedMs, { isDrawing = false, drawDra
 
 export function shouldCancelRuneDrawing(player, isDrawing) {
   return Boolean(isDrawing && (player?.mana ?? 0) <= 0);
+}
+
+/** 마나가 임계값을 초과할 때만 새로운 룬 시전을 시작할 수 있다. */
+export function hasEnoughManaToCast(player) {
+  return (player?.mana ?? 0) > MINIMUM_MAGIC_MANA;
+}
+
+export function hasManaRemaining(player) {
+  return (player?.mana ?? 0) > 0;
+}
+
+/** 기본 공격력 100을 기준으로 공격력 수치와 획득한 배율을 최종 피해에 적용한다. */
+export function calculatePlayerAttackDamage(baseDamage, player) {
+  const attackPower = Math.max(0, Number(player?.attackPower) || DEFAULT_ATTACK_POWER);
+  const attackMultiplier = Math.max(0, Number(player?.attackMultiplier) || 1);
+  return Math.round(
+    Math.max(0, Number(baseDamage) || 0)
+      * (attackPower / DEFAULT_ATTACK_POWER)
+      * attackMultiplier
+      * 10,
+  ) / 10;
 }
 
 /** 실제로 적에게 들어간 피해의 30분의 1만큼 궁극기 게이지를 채운다. */

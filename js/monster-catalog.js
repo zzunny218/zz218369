@@ -10,6 +10,8 @@ export const MonsterSpawnClass = Object.freeze({
 
 export const MONSTER_ATTACK_POWER_MULTIPLIER = 0.7;
 export const MONSTER_MOVE_SPEED_MULTIPLIER = 2 / 3;
+export const BOSS_STAT_MULTIPLIER = 0.75;
+export const SPIRIT_KING_HEALTH = 3000;
 
 function reducedAttackPower(attack) {
   return Math.round(attack * MONSTER_ATTACK_POWER_MULTIPLIER * 10) / 10;
@@ -106,6 +108,7 @@ export function scaleMonsterForStage(monster, stage = 1) {
 }
 
 export function createSpiritKingBoss({ position = { x: 0, z: 0 } } = {}) {
+  const attack = Math.round(reducedAttackPower(36) * BOSS_STAT_MULTIPLIER * 10) / 10;
   return {
     id: "spirit-king",
     templateId: "spiritKing",
@@ -114,9 +117,9 @@ export function createSpiritKingBoss({ position = { x: 0, z: 0 } } = {}) {
     attackStyle: "boss",
     unitValue: 10,
     element: "dark",
-    stats: { health: 4000, attack: reducedAttackPower(36), size: 3.15, attackRange: 2.4, moveSpeed: reducedMoveSpeed(1.05) },
-    currentHealth: 4000,
-    maximumHealth: 4000,
+    stats: { health: SPIRIT_KING_HEALTH, attack, size: 3.15, attackRange: 2.4, moveSpeed: reducedMoveSpeed(1.05) },
+    currentHealth: SPIRIT_KING_HEALTH,
+    maximumHealth: SPIRIT_KING_HEALTH,
     rangedCooldownMs: 1800,
     attackCooldownMs: 1200,
     aiState: "idle",

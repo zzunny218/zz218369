@@ -1,10 +1,10 @@
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 const NODE_LABELS = Object.freeze({
-  combat: "전투",
-  shop: "상점",
-  event: "선택",
-  boss: "보스",
+  combat: "⚔️",
+  shop: "💲",
+  event: "❓",
+  boss: "☠️",
 });
 
 function nodePosition(graph, node) {

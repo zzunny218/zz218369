@@ -43,17 +43,19 @@ test("NPC에게 가까이 이동하면 대사 범위에 들어간다", () => {
   assert.equal(session.npcNearby, true);
 });
 
-test("NPC 스승 그리모어는 닉네임과 손 반전 설정을 반영한 대사 13개를 가진다", () => {
+test("NPC 스승 그리모어는 닉네임과 손 반전 설정을 반영한 대사 12개를 가진다", () => {
   const dungeon = generateDungeon({ random: createSeededRandom(3) });
   const session = createWorldSession(dungeon, {
     playerProgress: createPlayerProgress({ nickname: "루나" }),
-    mouseRolesReversed: true,
+    handRolesReversed: true,
   });
   assert.equal(Math.hypot(session.npc.x, session.npc.z), 4);
   assert.equal(session.npc.name, "스승 그리모어");
-  assert.equal(session.npc.dialogues.length, 13);
+  assert.equal(session.npc.dialogues.length, 12);
   assert.match(session.npc.dialogues[0], /루나여/);
-  assert.match(session.npc.dialogues[7], /오른손/);
+  assert.match(session.npc.dialogues[4], /오른손/);
+  assert.match(session.npc.dialogues[5], /왼손/);
+  assert.match(session.npc.dialogues[6], /왼손 검지/);
 });
 
 test("시작방의 유일한 문을 통과하면 연결된 첫 전투방으로 이동한다", () => {
@@ -126,7 +128,7 @@ test("완료방 몬스터를 모두 처치한 뒤에만 상점과 다음 스테�
   assert.equal(findEnteredStagePortal(session, room, true)?.type, "shop");
 });
 
-test("카메라를 회전하면 WASD 이동 방향과 시야각이 함께 바뀐다", () => {
+test("카메라를 회전하면 화면 이동 방향과 시야각이 함께 바뀐다", () => {
   const dungeon = generateDungeon({ random: createSeededRandom(5) });
   const session = createWorldSession(dungeon);
   dungeon.roomById[session.currentRoomId].rocks = [];

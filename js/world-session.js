@@ -35,23 +35,23 @@ function hasKoreanBatchim(text) {
   return Number.isFinite(code) && code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 !== 0;
 }
 
-export function createGuideDialogues({ nickname = "마법사", mouseRolesReversed = false } = {}) {
-  const attackHand = mouseRolesReversed ? "오른손" : "왼손";
+export function createGuideDialogues({ nickname = "마법사", handRolesReversed = false } = {}) {
+  const triggerHand = handRolesReversed ? "오른손" : "왼손";
+  const drawingHand = handRolesReversed ? "왼손" : "오른손";
   const vocative = hasKoreanBatchim(nickname) ? "이여" : "여";
   return [
-    `제자 ${nickname}${vocative}, 드디어 모험을 떠나는구나.`,
-    "떠나기 전 마지막으로 알려주겠네.",
-    "오른손을 펴서 룬을 그릴 마법진을 준비할 수 있다네.",
-    "엄지와 중지를 붙이면 검지로 룬을 그릴 수 있다네.",
-    "오른손을 주먹 쥐면 마법이 발사된다네.",
-    "빠르게 그릴 수록 마나를 적게 사용할 수 있고,",
-    "정확하게 그릴 수록 강한 마법을 쓸 수 있네.",
-    `공격을 하고 싶다면 ${attackHand}을 주먹 쥐고,`,
-    `방어를 하고 싶다면 ${attackHand}을 피고 룬을 그려보게.`,
-    "UI를 조작하려면 검지로 원하는 UI를 0.2초 동안 가리키게나.",
-    "타락한 정령왕을 무찌르고 숲에 평화를 지키는 것이",
-    "자네의 사명이라네.",
-    "그럼, 응원하겠네.",
+    `제자 ${nickname}${vocative}, 마침내 떠날 때가 왔구나.`,
+    "마지막으로, 전투에서 꼭 기억해야 할 것만 알려주마.",
+    "양손을 활짝 펴면 룬을 그릴 준비가 된다네.",
+    "룬을 준비하면 가장 가까운 적을 자동으로 바라보게 될 걸세.",
+    `${triggerHand}을 주먹 쥔 동안 ${drawingHand} 검지가 움직인 자리에 룬이 새겨진다네.`,
+    `룬을 완성한 뒤 ${drawingHand}을 주먹 쥐면 마법이 발동하지.`,
+    `마법 카드는 ${drawingHand} 검지로 잠시 가리켜 선택할 수 있다네.`,
+    "빠르고 정확하게 그릴수록 적은 마나로 강한 마법을 사용할 수 있네.",
+    "하지만 마나가 30 이하라면 새로운 마법을 준비할 수 없으니 조심하게.",
+    "쓰러지더라도 모닥불의 불꽃이 자네를 다시 일으켜 줄 걸세.",
+    "타락한 정령왕을 멈추고, 숲이 잃어버린 빛을 되찾아다오.",
+    "무사히 돌아오너라. 나의 자랑스러운 제자여.",
   ];
 }
 
@@ -72,7 +72,7 @@ function isBlockedByRock(room, x, z) {
 /** 시작 시 플레이어, 출구 방향, NPC 배치를 확정한다. */
 export function createWorldSession(dungeon, {
   playerProgress = createPlayerProgress(),
-  mouseRolesReversed = false,
+  handRolesReversed = false,
   showNpc = true,
 } = {}) {
   const facing = dungeon.startDoorDirection;
@@ -109,7 +109,7 @@ export function createWorldSession(dungeon, {
       height: NPC_WORLD_HEIGHT,
       dialogues: createGuideDialogues({
         nickname: playerProgress.nickname,
-        mouseRolesReversed,
+        handRolesReversed,
       }),
       assetKey: "npc.guide",
       active: showNpc,
@@ -223,13 +223,13 @@ export function findEnteredStagePortal(session, room, roomCleared) {
   )) ?? null;
 }
 
-/** 마우스 드래그량을 연속적인 카메라 회전각에 반영한다. */
+/** 연속적인 입력량을 카메라 회전각에 반영한다. */
 export function rotateWorldCamera(session, radians) {
   session.player.cameraYaw = normalizeAngle(session.player.cameraYaw + radians);
   return session.player.cameraYaw;
 }
 
-/** WASD를 플레이어가 바라보는 방향 기준 이동으로 반영하고 문을 통과하면 방을 바꾼다. */
+/** 화면 이동 벡터를 카메라 방향 기준으로 반영하고 문을 통과하면 방을 바꾼다. */
 export function updateWorldSession(
   session,
   dungeon,

@@ -18,12 +18,12 @@ function pickRegularNodeType(random) {
 }
 
 /**
- * 총 7단계 탐험 지도를 만든다.
- * 1단계는 최초 전투 맵 하나, 2~6단계는 무작위 노드 3개, 7단계는 보스방 하나다.
+ * 총 6단계 탐험 지도를 만든다.
+ * 1단계는 최초 전투 맵 하나, 2~5단계는 무작위 노드 3개, 6단계는 보스방 하나다.
  */
 export function generateExplorationGraph({
   random = Math.random,
-  stageCount = 7,
+  stageCount = 6,
   minimumRegularWidth = 1,
   maximumRegularWidth = 3,
 } = {}) {
