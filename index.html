@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="키보드와 마우스로 룬을 그리는 판타지 어드벤처 게임"
+      content="카메라로 손짓을 인식해 룬을 그리는 판타지 어드벤처 게임"
     />
     <title>핑거 메이지(Finger mage)</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -14,7 +14,7 @@
     <main id="app" class="game-shell">
       <h1 id="game-title" class="sr-only">핑거 메이지(Finger mage)</h1>
       <canvas id="world-canvas" class="world-canvas" aria-label="3인칭 2.5D 게임 화면"></canvas>
-      <canvas id="rune-canvas" class="rune-canvas" aria-label="마우스로 그리는 룬 궤적"></canvas>
+      <canvas id="rune-canvas" class="rune-canvas" aria-label="손짓으로 그리는 룬 궤적"></canvas>
 
       <section id="title-screen" class="title-screen" aria-labelledby="title-heading">
         <div class="title-background" data-asset-slot="title-background" aria-hidden="true"></div>
@@ -41,7 +41,7 @@
             <p>비디오 설정</p>
             <div class="video-settings">
               <label><input data-video-setting="miniMap" type="checkbox" /><span>미니맵 표시</span></label>
-              <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 캠·조작 패널 표시</span></label>
+              <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 사용자 캠 표시</span></label>
             </div>
           </section>
           <p id="title-status" class="title-status" role="status" aria-live="polite"></p>
@@ -82,8 +82,8 @@
 
       <section id="world-ui" class="world-ui" aria-labelledby="game-title" hidden>
         <div class="top-left-ui">
-          <button class="menu-mark" data-gesture-ui="menu" data-manual-ui="menu" type="button" aria-label="메뉴: 우클릭으로 열기">☰</button>
-          <section id="npc-message" class="npc-dialogue-stack" aria-label="NPC 대사" aria-live="polite" hidden></section>
+          <button class="menu-mark" data-gesture-ui="menu" type="button" aria-label="게임 메뉴 열기">☰</button>
+          <section id="npc-message" class="npc-dialogue-stack" aria-label="캐릭터 대사" aria-live="polite" hidden></section>
           <section id="world-cast-notice" class="world-cast-notice" role="status" aria-live="polite" hidden>
             <strong>마법 발동</strong>
             <span id="world-cast-details"></span>
@@ -109,10 +109,10 @@
             <section id="menu-video-settings" class="menu-video-settings" aria-label="비디오 설정" hidden>
               <div class="video-settings">
                 <label><input data-video-setting="miniMap" type="checkbox" /><span>미니맵 표시</span></label>
-                <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 캠·조작 패널 표시</span></label>
+                <label><input data-video-setting="cameraPanel" type="checkbox" /><span>우측 하단 사용자 캠 표시</span></label>
               </div>
             </section>
-            <p id="menu-input-guide" class="menu-input-guide">왼쪽: 룬/카메라 · 오른쪽: UI</p>
+            <p id="menu-input-guide" class="menu-input-guide">WASD/방향키: 이동 · 좌클릭 드래그/Q·E: 카메라 · 양손 펼침: 룬 준비 · 왼손 주먹: 그리기</p>
           </section>
         </div>
 
@@ -124,7 +124,7 @@
             <p id="help-guide-text" class="help-guide-text"></p>
             <nav class="help-guide-pagination" aria-label="도움말 페이지 이동">
               <button id="help-guide-previous" type="button" aria-label="이전 도움말 페이지">◀</button>
-              <output id="help-guide-page" aria-live="polite">1/11</output>
+              <output id="help-guide-page" aria-live="polite">1/12</output>
               <button id="help-guide-next" type="button" aria-label="다음 도움말 페이지">▶</button>
             </nav>
           </div>
@@ -138,7 +138,7 @@
           <div class="boss-health-track"><span id="boss-health-fill"></span></div>
         </section>
 
-        <aside class="mini-map" data-gesture-ui="mini-map" data-manual-ui="mini-map" aria-label="미니맵: 우클릭으로 확대">
+        <aside class="mini-map" data-gesture-ui="mini-map" role="button" tabindex="0" aria-label="미니맵 클릭하여 확대">
           <p class="mini-map-title">미니맵</p>
           <div id="map-rooms" class="map-rooms" aria-label="절차 생성된 방 지도"></div>
         </aside>
@@ -153,6 +153,7 @@
               <path class="resource-value ultimate-value" pathLength="100" d="M 19.30 57.04 A 78 78 0 1 1 134.74 153.88" />
               <path class="resource-track mana-track" pathLength="100" d="M 141.61 53.86 A 63 63 0 0 1 134.55 134.55" />
               <path class="resource-value mana-value" pathLength="100" d="M 141.61 53.86 A 63 63 0 0 1 134.55 134.55" />
+              <line class="mana-threshold" x1="145" y1="79.3" x2="158.7" y2="76.6" />
               <text id="health-readout" class="resource-number health-number" x="20" y="112">100</text>
               <text id="mana-readout" class="resource-number mana-number" x="145" y="140">100</text>
               <text id="ultimate-readout" class="resource-number ultimate-number" x="139" y="164">0</text>
@@ -162,42 +163,22 @@
         </aside>
         <p id="defense-timer" class="defense-timer" role="status" aria-live="polite" hidden>방어 3.0</p>
 
-        <section class="tracker-panel control-panel" aria-label="손짓 인식 및 대체 조작 안내">
-          <p class="camera-title">손짓 인식 연결</p>
+        <section class="tracker-panel" aria-label="사용자 카메라">
           <div class="camera-stage">
             <video id="hand-camera" autoplay muted playsinline></video>
-            <canvas id="landmark-canvas" aria-hidden="true"></canvas>
             <p id="camera-placeholder" class="camera-placeholder">게임 시작 후 카메라 권한을 허용하면 손 인식이 시작됩니다.</p>
           </div>
-          <p id="hand-tracker-status" class="hand-tracker-status" role="status" aria-live="polite">MediaPipe 준비 중</p>
-          <p class="camera-title">대체 조작</p>
-          <div class="manual-control-stage">
-            <div class="wasd-keys" aria-label="이동 키">
-              <kbd class="key-w">W</kbd>
-              <kbd class="key-a">A</kbd><kbd class="key-s">S</kbd><kbd class="key-d">D</kbd>
-            </div>
-            <dl class="manual-control-list">
-              <div><dt><kbd>1</kbd></dt><dd>공격 룬</dd></div>
-              <div><dt><kbd>2</kbd></dt><dd>방어 룬</dd></div>
-              <div><dt id="rune-camera-button-label">좌클릭</dt><dd>룬 그리기 / 카메라 회전</dd></div>
-              <div><dt id="ui-button-label">우클릭</dt><dd>UI 조작</dd></div>
-            </dl>
-          </div>
-          <p class="camera-later-note">현재 단계에서는 손 랜드마크만 인식하며 게임 조작에는 아직 사용하지 않습니다.</p>
-          <p id="app-status" class="status" role="status" aria-live="polite">
-            대체 입력을 준비하는 중입니다.
-          </p>
-          <p id="gesture-readout" class="gesture-readout" aria-live="polite">
-            입력 상태: 준비 중
-          </p>
         </section>
 
+        <div id="hand-pointer" class="hand-pointer" aria-hidden="true" hidden></div>
+        <div id="rune-crosshair" class="rune-crosshair" aria-hidden="true">
+          <span></span>
+        </div>
+        <div id="rune-target-reticle" class="rune-target-reticle" aria-hidden="true">
+          <span></span>
+        </div>
         <div id="ultimate-edge-effect" class="ultimate-edge-effect" aria-hidden="true"></div>
         <section id="rune-mode-panel" class="rune-mode-panel" aria-live="polite" hidden>
-          <header class="rune-mode-header">
-            <p id="rune-mode-label" class="rune-mode-label">공격 룬</p>
-            <p>카드 선택 → 문양을 따라 그리기 → <kbd>Enter</kbd> 확정 · <kbd>Esc</kbd> 취소</p>
-          </header>
           <div id="rune-guide-stage" class="rune-guide-stage" data-rune-drawing-area>
             <svg id="rune-guide-symbol" class="rune-guide-symbol" viewBox="0 0 100 100" aria-label="선택한 룬 문양"></svg>
             <p id="rune-guide-prompt" class="rune-guide-prompt">아래에서 속성 카드를 선택하세요.</p>
@@ -224,21 +205,11 @@
           <div class="clear-panel">
             <p class="clear-kicker">CORRUPTED SPIRIT KING DEFEATED</p>
             <h2 id="clear-heading">클리어!!</h2>
-            <p id="clear-player-name" class="clear-player-name"></p>
-            <p id="clear-time" class="clear-time"></p>
-            <button id="clear-next-button" type="button">다음으로</button>
-          </div>
-        </section>
-
-        <section id="ranking-screen" class="ranking-screen" role="dialog" aria-modal="true" aria-labelledby="ranking-heading" hidden>
-          <div class="ranking-panel">
-            <p class="clear-kicker">CLEAR RANKING</p>
-            <h2 id="ranking-heading">랭킹</h2>
-            <ol id="ranking-list" class="ranking-list"></ol>
-            <div class="ranking-actions">
-              <button id="ranking-previous-button" type="button">이전으로</button>
-              <button id="ranking-title-button" type="button">타이틀로 돌아가기</button>
-              <button id="ranking-exit-button" type="button">게임 종료</button>
+            <p id="ending-story" class="ending-story"></p>
+            <p id="ending-thanks" class="ending-thanks"></p>
+            <div class="ending-actions">
+              <button id="clear-title-button" type="button">타이틀로 돌아가기</button>
+              <button id="clear-exit-button" type="button">게임 종료</button>
             </div>
           </div>
         </section>
@@ -253,7 +224,7 @@
             </div>
             <button id="developer-console-close" type="button" aria-label="개발자 창 닫기">×</button>
           </header>
-          <p class="developer-console-guide">명령어: /상점 · /보스 · /모든마법 · /궁극기 · /체력무한 · /돈무한 · /n단계</p>
+          <p class="developer-console-guide">명령어: /상점 · /보스 · /단계클리어 · /모든마법 · /궁극기 · /체력무한 · /공격력무한 · /돈무한 · /n단계</p>
           <form id="developer-console-form">
             <label for="developer-console-input">명령어 입력</label>
             <div>
